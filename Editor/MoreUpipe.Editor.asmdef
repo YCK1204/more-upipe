@@ -1,0 +1,27 @@
+{
+    "name": "MoreUpipe.Editor",
+    "rootNamespace": "MoreUpipe",
+    "references": [
+        "Unity.Pipeline",
+        "UnityEngine.UI"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [
+        "MOREUPIPE_UNITY_6_OR_NEWER"
+    ],
+    "versionDefines": [
+        {
+            "name": "Unity",
+            "expression": "6000.0.0f1",
+            "define": "MOREUPIPE_UNITY_6_OR_NEWER"
+        }
+    ],
+    "noEngineReferences": false
+}

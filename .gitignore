@@ -1,0 +1,4 @@
+# Unity 패키지는 .meta 를 포함해서 배포한다 (GUID 안정성). 여기서 제외하지 말 것.
+.DS_Store
+Thumbs.db
+*.tmp

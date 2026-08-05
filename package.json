@@ -1,0 +1,23 @@
+{
+  "name": "com.yck1204.more-upipe",
+  "displayName": "More Upipe",
+  "version": "0.1.0",
+  "unity": "6000.0",
+  "description": "UI inspection and interaction commands for com.unity.pipeline. Adds ui_find, ui_click, ui_raycast and wait_for so an agent driving the Editor can locate objects (including inactive ones), click UI that the legacy input module would otherwise swallow, see what intercepts a click, and wait on a condition without client-side polling.",
+  "keywords": [
+    "pipeline",
+    "cli",
+    "agent",
+    "automation",
+    "ui",
+    "testing"
+  ],
+  "dependencies": {
+    "com.unity.pipeline": "0.4.0-exp.1",
+    "com.unity.ugui": "2.0.0"
+  },
+  "author": {
+    "name": "YCK1204",
+    "url": "https://github.com/YCK1204"
+  }
+}
