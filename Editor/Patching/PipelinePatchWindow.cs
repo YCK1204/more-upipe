@@ -132,7 +132,7 @@ namespace MoreUpipe.Patching
             };
             box.Add(stateLabel);
 
-            var path = new Label(status.Patch.RelativePath)
+            var path = new Label(status.Patch.TargetSummary)
             {
                 style = { marginLeft = 18, marginTop = 2, fontSize = 10, opacity = 0.55f },
             };
