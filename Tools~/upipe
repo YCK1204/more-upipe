@@ -1,0 +1,278 @@
+#!/usr/bin/env bash
+# upipe — drive the Unity Pipeline editor server from WSL via curl.
+#
+# Why: the `unity` CLI discovers the editor by checking the descriptor's PID is
+# alive. From WSL it cannot see the Windows editor PID, so it judges the
+# descriptor stale and DELETES it -> never connects. This wrapper talks to the
+# HTTP server directly (curl), which works fine across the WSL<->Windows boundary.
+#
+# Creds (port + evalToken) are read from the editor's descriptor file when
+# present, and cached so calls keep working even after the editor rotates/removes it.
+#
+# Core:
+#   upipe status                         # server heartbeat
+#   upipe commands [grep]                # list command names (optional filter)
+#   upipe describe <name>                # full schema for one command
+#   upipe exec <cmd> [params]            # run any command. params: JSON, or k=v pairs
+#   upipe raw <GET|POST> <path> [json]   # low-level /api/<path>, full response body
+#
+# Shortcuts (reduce Bash/JSON friction):
+#   upipe rc [force]                     # recompile + poll until done (prints errors if any)
+#   upipe eval '<C# code>'               # inline eval (auto JSON-escaped)
+#   upipe eval - <<'EOF' ... EOF         # eval from stdin -- no quoting rules at all
+#   upipe evalf <file.cs> [timeoutMs]    # eval a C# FILE
+#   upipe test [filter] [mode]           # run_tests (mode default all) + PASS/FAIL summary
+#   upipe log [severity] [limit] [grep]  # console logs; stack traces off unless UPIPE_STACK=1
+#   upipe scene <path>                   # open_scene
+#   upipe play | stop | pause            # play/stop wait for the transition when the server can
+#
+# exec output: only the command's `result` is printed. Use `raw POST exec ...` for
+# the whole envelope (success/error/executedAt/...).
+#
+# eval note: the server wraps code in a method body, so NO top-level `using`
+# directives. Usings available depend on the server: the stock pipeline gives
+# System, System.Collections.Generic, System.Linq, UnityEngine, UnityEditor.
+# With more-upipe's `eval_usings` patch applied, UnityEngine.UIElements,
+# UnityEngine.SceneManagement, System.Text and System.Reflection are added too --
+# without it, write UI Toolkit calls fully qualified
+# (e.g. UnityEngine.UIElements.UQueryExtensions.Q(root, "name")).
+# eval timeout is capped at 30000 ms by the server; larger values fail as Bad Request.
+set -eu
+
+# Project root: UPIPE_PROJECT wins; otherwise walk up from the working directory
+# looking for the descriptor the editor writes. Walking up is what makes the tool
+# usable from anywhere inside a project without configuring anything, and keeps a
+# single install working across several projects.
+_find_project() {
+  if [ -n "${UPIPE_PROJECT:-}" ]; then
+    printf '%s' "$UPIPE_PROJECT"; return
+  fi
+  d=$PWD
+  while [ "$d" != "/" ]; do
+    [ -f "$d/Library/Pipeline/.unity-pipeline-port" ] && { printf '%s' "$d"; return; }
+    d=$(dirname "$d")
+  done
+  # Nothing found: fall back to the cwd so the error names a real path, and the
+  # cached credentials below still give a working call from a previous session.
+  printf '%s' "$PWD"
+}
+
+PROJECT=$(_find_project)
+PORTFILE="$PROJECT/Library/Pipeline/.unity-pipeline-port"
+# Cache is per project, so switching projects does not talk to the wrong editor.
+CACHE="$HOME/.config/upipe/creds-$(printf '%s' "$PROJECT" | cksum | cut -d' ' -f1)"
+
+_load_creds() {
+  if [ -f "$PORTFILE" ]; then
+    PORT=$(python3 -c "import json;print(json.load(open('$PORTFILE'))['port'])" 2>/dev/null || true)
+    TOKEN=$(python3 -c "import json;print(json.load(open('$PORTFILE'))['evalToken'])" 2>/dev/null || true)
+    if [ -n "${PORT:-}" ] && [ -n "${TOKEN:-}" ]; then
+      mkdir -p "$(dirname "$CACHE")"
+      printf '%s\n%s\n' "$PORT" "$TOKEN" > "$CACHE"
+      return
+    fi
+  fi
+  if [ -f "$CACHE" ]; then
+    PORT=$(sed -n 1p "$CACHE"); TOKEN=$(sed -n 2p "$CACHE")
+  else
+    echo "upipe: no creds — descriptor missing and no cache." >&2
+    echo "       Ensure the editor is running with Pipeline server started, then retry." >&2
+    exit 1
+  fi
+}
+
+_pp() { python3 -m json.tool 2>/dev/null || cat; }
+
+_load_creds
+BASE="http://localhost:$PORT/api"
+AUTH="Authorization: Bearer $TOKEN"
+
+# POST /api/exec with a command + params-JSON, echo the raw response body.
+_exec_raw() {
+  local c="$1" params="${2:-}"
+  [ -z "$params" ] && params='{}'
+  # build the request body with python so params-JSON is embedded safely
+  local body
+  body=$(python3 -c "import json,sys; print(json.dumps({'command':sys.argv[1],'parameters':json.loads(sys.argv[2])}))" "$c" "$params")
+  curl -s -H "$AUTH" -H "Content-Type: application/json" -X POST "$BASE/exec" -d "$body"
+}
+
+# Pretty-print an exec response's .result (falls back to whole body).
+_exec_result() {
+  python3 -c "import json,sys
+d=json.load(sys.stdin)
+if not d.get('success'): print('ERROR:', d.get('error') or d.get('errorDetails')); sys.exit(0)
+r=d.get('result')
+print(r if isinstance(r,str) else json.dumps(r,ensure_ascii=False,indent=2))"
+}
+
+# Accept params as JSON ('{"a":1}') or as k=v pairs (a=1 b=two c=true).
+# k=v exists because quoting JSON inside a shell command is where most of the
+# friction is; values that parse as JSON keep their type, everything else stays a
+# string, so k=true is a boolean and k=hello is not.
+_params_json() {
+  [ "$#" -eq 0 ] && { echo '{}'; return; }
+  case "$1" in
+    '{'*) echo "$1"; return ;;
+  esac
+  python3 -c "
+import json,sys
+out={}
+for arg in sys.argv[1:]:
+    if '=' not in arg:
+        sys.stderr.write('upipe: expected k=v, got %r\n' % arg); sys.exit(2)
+    k,v=arg.split('=',1)
+    try: out[k]=json.loads(v)
+    except ValueError: out[k]=v
+print(json.dumps(out))" "$@"
+}
+
+cmd="${1:-status}"; shift || true
+case "$cmd" in
+  status)
+    curl -s -H "$AUTH" "$BASE/status" | _pp ;;
+
+  commands)
+    curl -s -H "$AUTH" "$BASE/commands" \
+      | python3 -c "import json,sys
+f=sys.argv[1] if len(sys.argv)>1 else ''
+for c in json.load(sys.stdin)['commands']:
+    if f.lower() in c['name'].lower(): print(c['name'])" "${1:-}" ;;
+
+  describe)
+    curl -s -H "$AUTH" "$BASE/commands" \
+      | python3 -c "import json,sys
+n=sys.argv[1]
+for c in json.load(sys.stdin)['commands']:
+    if c['name']==n:
+        print(c['name']+': '+c['description'])
+        for p in c['parameters']:
+            print(f\"  {p['name']} ({p['type']}, req={p['required']}, def={p.get('defaultValue')}): {p['description']}\")" "${1:-}" ;;
+
+  exec)
+    c="${1:?usage: upipe exec <cmd> [json | k=v ...]}"; shift || true
+    # Only the result: the envelope (success/command/executionTimeMs/message/
+    # error/errorDetails/executedAt) is noise on every single call. `raw` still
+    # returns the whole thing when the envelope is what you are debugging.
+    _exec_raw "$c" "$(_params_json "$@")" | _exec_result ;;
+
+  raw)
+    m="${1:-GET}"; p="${2:-status}"; d="${3:-}"
+    if [ "$m" = POST ]; then
+      curl -s -H "$AUTH" -H "Content-Type: application/json" -X POST "$BASE/$p" -d "$d" | _pp
+    else
+      curl -s -H "$AUTH" "$BASE/$p" | _pp
+    fi ;;
+
+  rc|recompile)
+    # Recompiling while playing reloads the domain: the scene keeps running and
+    # editor_status still says "playing", but every static field is reset. Warn here
+    # too -- the server-side guard only exists with more-upipe's patch applied.
+    if _exec_raw editor_status '{}' | grep -q '"playMode": *"playing"'; then
+      if [ "${1:-}" = force ]; then
+        echo "warning: recompiling while playing; statics will be reset by the domain reload." >&2
+      else
+        echo "refused: editor is playing. A recompile now reloads the domain and resets all static" >&2
+        echo "         state while the scene keeps running. Run 'upipe stop' first, or 'upipe rc force'." >&2
+        exit 1
+      fi
+    fi
+    echo "$(_exec_raw recompile "$([ "${1:-}" = force ] && echo '{"force":true}' || echo '{}')" | python3 -c "import json,sys;print((json.load(sys.stdin).get('result') or {}).get('status','?'))")"
+    for i in $(seq 1 40); do
+      s=$(_exec_raw recompile_status '{}' | python3 -c "import json,sys;print(json.load(sys.stdin)['result'])" 2>/dev/null || true)
+      case "$s" in
+        *up_to_date*|*'"status":"completed"'*) echo "done: $s"; break ;;
+        *'"failed":true'*) echo "FAILED: $s"; break ;;
+      esac
+      sleep 3
+    done ;;
+
+  eval)
+    code="${1:-}"; tmo="${2:-30000}"
+    # `-` reads the code from stdin. Quoting C# inside a shell argument is the single
+    # biggest source of friction here: braces, single quotes and lambdas all have to
+    # survive bash *and* the python that builds the JSON. A heredoc bypasses both,
+    # so the code arrives exactly as written.
+    [ "$code" = "-" ] && code=$(cat)
+    python3 -c "import json,sys;print(json.dumps({'code':sys.argv[1],'timeout':int(sys.argv[2])}))" "$code" "$tmo" \
+      | { read -r body; curl -s -H "$AUTH" -H "Content-Type: application/json" -X POST "$BASE/exec" \
+            -d "{\"command\":\"eval\",\"parameters\":$body}"; } \
+      | python3 -c "import json,sys
+d=json.load(sys.stdin); r=d.get('result') or {}
+if r.get('success'): print(r.get('result') if r.get('result') is not None else (r.get('output') or '(no return value)'))
+else:
+    for g in (r.get('diagnostics') or []): print(f\"{g['severity']} L{g['line']}:{g['column']} {g['id']}: {g['message']}\")
+    if not r.get('diagnostics'): print('ERROR:', d.get('error') or r.get('error'))" ;;
+
+  evalf)
+    file="${1:?usage: upipe evalf <file.cs> [timeoutMs]}"; tmo="${2:-30000}"
+    [ -f "$file" ] || { echo "no such file: $file" >&2; exit 1; }
+    python3 -c "import json,sys;print(json.dumps({'code':open(sys.argv[1]).read(),'timeout':int(sys.argv[2])}))" "$file" "$tmo" \
+      | { read -r body; curl -s -H "$AUTH" -H "Content-Type: application/json" -X POST "$BASE/exec" \
+            -d "{\"command\":\"eval\",\"parameters\":$body}"; } \
+      | python3 -c "import json,sys
+d=json.load(sys.stdin); r=d.get('result') or {}
+if r.get('success'): print(r.get('result') if r.get('result') is not None else (r.get('output') or '(no return value)'))
+else:
+    for g in (r.get('diagnostics') or []): print(f\"{g['severity']} L{g['line']}:{g['column']} {g['id']}: {g['message']}\")
+    if not r.get('diagnostics'): print('ERROR:', d.get('error') or r.get('error'))" ;;
+
+  test)
+    filter="${1:-}"; mode="${2:-all}"
+    params=$(python3 -c "import json,sys;p={'mode':sys.argv[2]}; f=sys.argv[1]
+if f: p['filter']=f
+print(json.dumps(p))" "$filter" "$mode")
+    _exec_raw run_tests "$params" | python3 -c "import json,sys
+d=json.load(sys.stdin); r=d.get('result')
+if not d.get('success'): print('ERROR:', d.get('error') or d.get('errorDetails')); sys.exit(0)
+print(json.dumps(r,ensure_ascii=False,indent=2) if not isinstance(r,str) else r)" ;;
+
+  log)
+    # A message without its stack trace says what broke but not where, which is the
+    # question being asked. Stacks are off by default because they dominate the
+    # payload; UPIPE_STACK=1 turns them on for the call that needs them.
+    sev="${1:-error}"; lim="${2:-30}"; pat="${3:-}"; stk="${UPIPE_STACK:-0}"
+    params=$(python3 -c "
+import json,sys
+p={'severity':sys.argv[1],'limit':int(sys.argv[2])}
+if sys.argv[3]: p['grep']=sys.argv[3]
+print(json.dumps(p))" "$sev" "$lim" "$pat")
+    _exec_raw get_console_logs "$params" | python3 -c "import json,sys
+want_stack = sys.argv[1] == '1'
+d=json.load(sys.stdin); r=d.get('result') or {}
+logs=r.get('logs') or r.get('entries') or r.get('Entries') or []
+print(f\"total={r.get('total')} returned={r.get('returned')}\")
+for l in logs:
+    m=l.get('Message') or l.get('message') or ''
+    print('-', m if want_stack else m[:400])
+    st=l.get('StackTrace') or l.get('stackTrace')
+    if want_stack and st:
+        for line in st.strip().splitlines():
+            print('   ', line)" "$stk" ;;
+
+  scene)
+    p="${1:?usage: upipe scene <path>}"
+    _exec_raw open_scene "$(python3 -c "import json,sys;print(json.dumps({'path':sys.argv[1]}))" "$p")" \
+      | python3 -c "import json,sys;d=json.load(sys.stdin);print('success:',d.get('success'),'|',d.get('error') or 'opened')" ;;
+
+  # editor_play/editor_stop set the flag and return in the same frame, so a stop
+  # immediately followed by a play sees the old state and answers "Already in play
+  # mode". more-upipe's play_mode waits for the transition; fall back to the stock
+  # command when that package is not installed.
+  play|stop)
+    target=$([ "$cmd" = play ] && echo play || echo stop)
+    out=$(_exec_raw play_mode "$(python3 -c "import json,sys;print(json.dumps({'state':sys.argv[1]}))" "$target")")
+    if printf '%s' "$out" | grep -q '"success": *true'; then
+      printf '%s' "$out" | _exec_result
+    else
+      _exec_raw "editor_$([ "$cmd" = play ] && echo play || echo stop)" '{}' | _exec_result
+      echo "note: play_mode unavailable (install more-upipe); this returned before the transition finished." >&2
+    fi ;;
+  pause) _exec_raw editor_pause '{}' | _exec_result ;;
+
+  *)
+    echo "usage: upipe {status|commands [grep]|describe <name>|exec <cmd> [json|k=v ...]|raw <GET|POST> <path> [json]}" >&2
+    echo "             {rc [force]|eval <code>|eval - <heredoc>|evalf <file> [ms]|test [filter] [mode]}" >&2
+    echo "             {log [sev] [n] [grep]|scene <path>|play|stop|pause}" >&2
+    exit 2 ;;
+esac
