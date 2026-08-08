@@ -1,15 +1,17 @@
 {
   "name": "com.yck1204.more-upipe",
   "displayName": "More Upipe",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "unity": "6000.0",
-  "description": "UI inspection and interaction commands for com.unity.pipeline. Adds ui_find, ui_click, ui_raycast and wait_for so an agent driving the Editor can locate objects (including inactive ones), click UI that the legacy input module would otherwise swallow, see what intercepts a click, and wait on a condition without client-side polling.",
+  "description": "UI inspection and interaction commands for com.unity.pipeline. Adds ui_find, ui_click, ui_raycast, uitk_find/uitk_tree/uitk_style for UI Toolkit, wait_for and play_mode so an agent driving the Editor can locate objects (including inactive ones), inspect UI Toolkit panels the scene hierarchy never shows, click UI that the legacy input module would otherwise swallow, and wait on a condition or a play-mode transition without client-side polling.",
   "keywords": [
     "pipeline",
     "cli",
     "agent",
     "automation",
     "ui",
+    "uitoolkit",
+    "uielements",
     "testing"
   ],
   "dependencies": {
