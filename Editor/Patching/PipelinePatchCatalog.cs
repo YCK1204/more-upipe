@@ -18,6 +18,8 @@ namespace MoreUpipe.Patching
             ConsoleFilter,
             QuietUnknownCommand,
             StatusFrameCount,
+            EvalUsings,
+            RecompilePlayModeGuard,
         };
 
         /// <summary>
@@ -175,5 +177,112 @@ namespace MoreUpipe.Patching
         /// </summary>
         [JsonProperty(""frameCount"")]
         public int FrameCount { get; set; }"));
+
+        /// <summary>
+        /// Widen the using directives that <c>eval</c> compiles user code against.
+        ///
+        /// The wrapper supplies System, System.Collections.Generic, System.Linq, UnityEngine and — in
+        /// the Editor — UnityEditor. Everything else has to be written fully qualified, and because
+        /// the wrapper puts the code inside a method body, the caller cannot add a using of their own.
+        /// The result is that ordinary UI Toolkit work reads like
+        /// <c>UnityEngine.UIElements.UQueryExtensions.Q&lt;Label&gt;(root, "Name")</c>, and the first
+        /// attempt is usually <c>.Q&lt;Label&gt;(...)</c>, which fails with CS1061 because extension
+        /// methods resolve through usings.
+        ///
+        /// UIElements is the namespace that costs the most to omit: every project with runtime UI needs
+        /// it, and its API is extension-method heavy, so its absence produces errors that look like the
+        /// type is wrong rather than the using is missing.
+        ///
+        /// Only namespaces shipped by Unity are added. Project namespaces are deliberately left out —
+        /// they differ per project, and a using for a namespace that does not exist is a compile error
+        /// on every eval, which would turn this from a convenience into a breakage.
+        ///
+        /// THE ALIASES ARE NOT OPTIONAL. Opening UIElements introduces three names that already exist
+        /// in the namespaces the wrapper opened before it: <c>Cursor</c> and <c>PointerType</c> collide
+        /// with UnityEngine, <c>PopupWindow</c> with UnityEditor. Without the aliases, code that
+        /// compiled before the patch — <c>Cursor.visible</c> is the obvious one — starts failing with
+        /// CS0104, and the caller has no way to disambiguate because they cannot write a using. Each
+        /// alias pins the name to what it meant before, so this patch only ever adds reach; the
+        /// UIElements versions stay available fully qualified.
+        /// </summary>
+        public static PipelinePatch EvalUsings => new PipelinePatch(
+            id: "eval_usings",
+            title: "eval: compile against UI Toolkit and common Unity namespaces",
+            description: "Adds UnityEngine.UIElements, UnityEngine.SceneManagement, System.Text and System.Reflection to the " +
+                         "eval wrapper. Without them UI Toolkit code must be fully qualified, and extension methods such as " +
+                         "Q()/Query() fail with CS1061 because the caller cannot add a using of their own. Cursor, PointerType " +
+                         "and PopupWindow are aliased to their pre-patch meaning so no code that compiled before stops doing so.",
+            new PatchEdit(
+                relativePath: "Runtime/Compilation/EvalCodeCompiler.cs",
+                anchor:
+@"            return $@""using System;
+using System.Collections.Generic;
+using System.Linq;
+using UnityEngine;
+{editorUsing}",
+                replacement:
+@"            // [MoreUpipe:eval_usings] UIElements carries the extension methods (Q/Query) that UI work
+            // needs; the wrapper body cannot declare usings, so omitting it forces full qualification.
+            // The aliases keep three names meaning what they meant before UIElements was opened —
+            // Cursor and PointerType also live in UnityEngine, PopupWindow in UnityEditor — so this
+            // patch cannot break code that already compiled.
+            var uiElementsAliases = isEditorContext
+                ? ""using Cursor = UnityEngine.Cursor;\nusing PointerType = UnityEngine.PointerType;\nusing PopupWindow = UnityEditor.PopupWindow;""
+                : ""using Cursor = UnityEngine.Cursor;\nusing PointerType = UnityEngine.PointerType;"";
+
+            return $@""using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Reflection;
+using UnityEngine;
+using UnityEngine.UIElements;
+using UnityEngine.SceneManagement;
+{editorUsing}
+{uiElementsAliases}"));
+
+        /// <summary>
+        /// Refuse to recompile while the Editor is playing, unless the caller says otherwise.
+        ///
+        /// A recompile during play triggers a domain reload. The scene survives, so the objects are
+        /// still there and <c>editor_status</c> still reports playing — but every static field has been
+        /// reset. A singleton accessed through <c>Instance</c> reads null while
+        /// <c>FindObjectsByType</c> returns the very object it should have handed back, and nothing in
+        /// the response says a reload happened. The failure surfaces later, in whatever command
+        /// depended on that state, which is the worst place to discover it.
+        ///
+        /// <c>status_frame_count</c> makes the reload detectable after the fact. This makes the common
+        /// cause avoidable: stop, recompile, play. The escape hatch stays for callers who know what
+        /// they are doing.
+        /// </summary>
+        public static PipelinePatch RecompilePlayModeGuard => new PipelinePatch(
+            id: "recompile_playmode_guard",
+            title: "recompile: refuse while playing unless forced",
+            description: "Recompiling during play triggers a domain reload that resets every static field while the scene and " +
+                         "the reported playMode stay unchanged — singletons read null with no error anywhere. Adds a 'force' " +
+                         "parameter; without it the command returns a refusal instead.",
+            new PatchEdit(
+                relativePath: "Editor/Commands/RecompileCommand.cs",
+                anchor:
+@"        public static object Recompile(
+            [CliArg(""focus"", ""If true, bring the Editor to the foreground before compiling. Off by default."")] bool focus = false)
+        {",
+                replacement:
+@"        public static object Recompile(
+            [CliArg(""focus"", ""If true, bring the Editor to the foreground before compiling. Off by default."")] bool focus = false,
+            [CliArg(""force"", ""Recompile even while playing. A domain reload will reset all static state."")] bool force = false)
+        {
+            // [MoreUpipe:recompile_playmode_guard] A reload during play keeps the scene and the reported
+            // playMode intact while clearing every static, so the damage only shows up later.
+            if (EditorApplication.isPlaying && !force)
+            {
+                return new
+                {
+                    status = ""refused"",
+                    reason = ""editor is playing"",
+                    detail = ""Recompiling now triggers a domain reload that resets all static state while the scene keeps running. Stop play mode first, or pass force=true."",
+                };
+            }
+"));
     }
 }
