@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using UnityEditor;
-using PackageInfo = UnityEditor.PackageManager.PackageInfo;
 
 namespace MoreUpipe.Patching
 {
@@ -64,12 +63,57 @@ namespace MoreUpipe.Patching
 
         /// <summary>
         /// Root of the installed pipeline package, or null when it is not installed.
-        /// Resolved through the Package Manager rather than by scanning Library/PackageCache, because
-        /// the folder name carries a content hash that changes with every package version.
+        ///
+        /// Resolved by asking the filesystem to expand the virtual <c>Packages/&lt;name&gt;</c> path,
+        /// not by scanning Library/PackageCache (the folder name carries a content hash that changes
+        /// with every version) and NOT through the Package Manager API.
+        ///
+        /// WHY not the Package Manager: <c>PackageInfo.GetAllRegisteredPackages()</c> reaches into UPM,
+        /// and calling it early in a domain reload — which is when a startup check runs — makes Unity
+        /// construct <c>PackageManagerProjectSettings</c> and <c>ServicesContainer</c> while they are
+        /// already being constructed, logging "ScriptableSingleton already exists. Did you query the
+        /// singleton in a constructor?" for each. The warnings are Unity's, but the trigger is ours,
+        /// and a diagnostic tool that adds noise to the console it is meant to help read is working
+        /// against itself. Path expansion needs none of that machinery.
         /// </summary>
-        public static string PackageRoot => FindPackage()?.resolvedPath;
+        public static string PackageRoot
+        {
+            get
+            {
+                if (s_PackageRoot != null)
+                    return s_PackageRoot.Length == 0 ? null : s_PackageRoot;
 
-        public static string InstalledPipelineVersion => FindPackage()?.version;
+                string resolved = null;
+                try
+                {
+                    var candidate = Path.GetFullPath("Packages/" + PipelinePackageName);
+                    if (Directory.Exists(candidate))
+                        resolved = candidate;
+                }
+                catch (Exception)
+                {
+                    resolved = null;
+                }
+
+                // Empty string means "looked, not there" — distinct from null, which means "not looked
+                // yet". Without that distinction a missing package is re-probed on every access.
+                s_PackageRoot = resolved ?? string.Empty;
+                return resolved;
+            }
+        }
+
+        /// <summary>Version string from the installed package's manifest, or null when unreadable.</summary>
+        public static string InstalledPipelineVersion
+        {
+            get
+            {
+                if (s_Version != null)
+                    return s_Version.Length == 0 ? null : s_Version;
+
+                s_Version = ReadPackageVersion() ?? string.Empty;
+                return s_Version.Length == 0 ? null : s_Version;
+            }
+        }
 
         public static bool IsPipelineInstalled => PackageRoot != null;
 
@@ -81,10 +125,46 @@ namespace MoreUpipe.Patching
         public static bool IsUnverifiedPipelineVersion =>
             IsPipelineInstalled && InstalledPipelineVersion != VerifiedPipelineVersion;
 
-        static PackageInfo FindPackage()
+        // Cached because GetStatus resolves a path per edit, so a single status sweep would otherwise
+        // hit the filesystem a dozen times for an answer that cannot change without a domain reload.
+        static string s_PackageRoot;
+        static string s_Version;
+
+        /// <summary>
+        /// Pull "version" out of the package manifest. Hand-scanned rather than JSON-parsed to avoid
+        /// taking a dependency on a serializer for one field.
+        /// </summary>
+        static string ReadPackageVersion()
         {
-            return PackageInfo.GetAllRegisteredPackages()
-                .FirstOrDefault(candidate => candidate.name == PipelinePackageName);
+            var root = PackageRoot;
+            if (root == null)
+                return null;
+
+            try
+            {
+                var manifest = Path.Combine(root, "package.json");
+                if (!File.Exists(manifest))
+                    return null;
+
+                foreach (var line in File.ReadAllLines(manifest))
+                {
+                    var key = line.IndexOf("\"version\"", StringComparison.Ordinal);
+                    if (key < 0)
+                        continue;
+
+                    var open = line.IndexOf('"', line.IndexOf(':', key) + 1);
+                    var close = open < 0 ? -1 : line.IndexOf('"', open + 1);
+                    if (open >= 0 && close > open)
+                        return line.Substring(open + 1, close - open - 1);
+                }
+            }
+            catch (Exception)
+            {
+                // An unreadable manifest is not worth failing over: the anchors decide applicability,
+                // and the version is only shown as context.
+            }
+
+            return null;
         }
 
         public static List<PatchStatus> GetStatuses()
@@ -109,14 +189,14 @@ namespace MoreUpipe.Patching
                     return result;
                 }
 
-                var source = File.ReadAllText(path);
+                var source = Normalize(File.ReadAllText(path));
                 if (source.Contains(patch.Marker))
                 {
                     applied++;
                     continue;
                 }
 
-                var occurrences = CountOccurrences(source, edit.Anchor);
+                var occurrences = CountOccurrences(source, Normalize(edit.Anchor));
                 if (occurrences == 0)
                 {
                     result.State = PatchState.AnchorNotFound;
@@ -179,18 +259,24 @@ namespace MoreUpipe.Patching
                 foreach (var edit in patch.Edits)
                 {
                     var path = ResolveTargetPath(edit);
-                    var source = File.ReadAllText(path);
+                    var original = File.ReadAllText(path);
 
-                    BackUp(path, source);
+                    BackUp(path, original);
 
-                    var patched = source.Replace(edit.Anchor, patch.Marker + Environment.NewLine + edit.Replacement);
-                    File.WriteAllText(path, patched);
+                    // Match on normalized text, then write back in whatever the file already used.
+                    // Rewriting a package file's line endings wholesale would make every later diff
+                    // against the package unreadable.
+                    var usedCrLf = original.Contains("\r\n");
+                    var patched = Normalize(original)
+                        .Replace(Normalize(edit.Anchor), patch.Marker + "\n" + Normalize(edit.Replacement));
+
+                    File.WriteAllText(path, usedCrLf ? patched.Replace("\n", "\r\n") : patched);
                 }
 
                 applied.Add(patch.Id);
             }
 
-            AssetDatabase.Refresh();
+            RefreshDeferred();
 
             report = applied.Count == 0
                 ? "Already applied; nothing to do."
@@ -246,7 +332,7 @@ namespace MoreUpipe.Patching
             }
 
             if (reverted.Count > 0)
-                AssetDatabase.Refresh();
+                RefreshDeferred();
 
             report = string.Join("\n",
                 new[]
@@ -259,6 +345,20 @@ namespace MoreUpipe.Patching
                 report = "Nothing to revert.";
 
             return failed.Count == 0;
+        }
+
+        /// <summary>
+        /// Re-import on the next editor tick instead of inline.
+        ///
+        /// WHY: a caller driving this over HTTP is on a request that has to answer. Refreshing inline
+        /// runs the import synchronously on the main thread, and on a project with a large asset in the
+        /// queue that can exceed a minute — during which every other command fails with a main-thread
+        /// timeout and nothing says why, because the request that caused it has not returned either.
+        /// Deferring lets the apply report its result first; the reload then happens on its own.
+        /// </summary>
+        static void RefreshDeferred()
+        {
+            EditorApplication.delayCall += () => AssetDatabase.Refresh();
         }
 
         static void BackUp(string path, string originalSource)
@@ -278,6 +378,21 @@ namespace MoreUpipe.Patching
                 return null;
 
             return Path.GetFullPath(Path.Combine(root, edit.RelativePath.Replace('/', Path.DirectorySeparatorChar)));
+        }
+
+        /// <summary>
+        /// Collapse line endings to LF so a multi-line anchor can match regardless of how either side
+        /// was checked out.
+        ///
+        /// WHY this is not optional: the anchors live in C# verbatim strings, so they carry whatever
+        /// endings this repository was cloned with, while the package source carries whatever Unity
+        /// wrote into <c>PackageCache</c>. On a Windows checkout of this package against an LF package
+        /// cache, every multi-line anchor mismatches on the first newline — which surfaced as every
+        /// patch reporting AnchorNotFound, indistinguishable from the package genuinely having changed.
+        /// </summary>
+        static string Normalize(string text)
+        {
+            return text == null ? null : text.Replace("\r\n", "\n").Replace("\r", "\n");
         }
 
         static int CountOccurrences(string source, string needle)
