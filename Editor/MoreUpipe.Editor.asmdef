@@ -3,7 +3,8 @@
     "rootNamespace": "MoreUpipe",
     "references": [
         "Unity.Pipeline",
-        "UnityEngine.UI"
+        "UnityEngine.UI",
+        "Unity.Pipeline.Attributes"
     ],
     "includePlatforms": [
         "Editor"
