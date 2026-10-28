@@ -40,7 +40,7 @@ namespace MoreUpipe
             [CliArg("code", "C# expression body to evaluate each attempt. Must return a value.", Required = true)] string code = null,
             [CliArg("equals", "Succeed when the result equals this string.")] string equals = null,
             [CliArg("contains", "Succeed when the result contains this substring.")] string contains = null,
-            [CliArg("timeout", "Seconds to keep polling before giving up.")] float timeout = 60f,
+            [CliArg("timeout", "Seconds to keep polling before giving up. Also the request timeout.")] double timeoutInSeconds = 60,
             [CliArg("interval", "Seconds between attempts.")] float interval = 1f)
         {
             if (string.IsNullOrEmpty(code))
@@ -49,7 +49,7 @@ namespace MoreUpipe
             // Guard the knobs: a zero interval turns the wait into a busy loop that starves the very
             // Editor tick the condition depends on.
             interval = Math.Max(0.1f, interval);
-            timeout = Math.Max(0.1f, timeout);
+            var timeout = UsableSeconds(timeoutInSeconds);
 
             var stopwatch = Stopwatch.StartNew();
             string last = null;
@@ -69,7 +69,11 @@ namespace MoreUpipe
                         elapsedSeconds = Math.Round(stopwatch.Elapsed.TotalSeconds, 2),
                     };
 
-                await Task.Delay(TimeSpan.FromSeconds(interval));
+                var remaining = timeout - stopwatch.Elapsed.TotalSeconds;
+                if (remaining <= 0)
+                    break;
+
+                await Task.Delay(TimeSpan.FromSeconds(Math.Min(interval, remaining)));
             }
 
             return new
@@ -113,7 +117,15 @@ namespace MoreUpipe
                 EditorApplication.update -= Tick;
                 try
                 {
-                    var response = Unity.Pipeline.Runtime.Commands.CodeEvalCommand.EvaluateCode(code);
+                    var eval = FindScriptEval();
+                    if (eval == null)
+                    {
+                        completion.SetResult("error: the pipeline 'script eval' command is not registered");
+                        return;
+                    }
+
+                    var response = eval.Method.Invoke(eval.Target, new object[] { code, 30d })
+                        as Unity.Pipeline.Models.CommandExecutionResponse;
                     completion.SetResult(response == null || !response.Success
                         ? null
                         : response.Result?.ToString());
@@ -126,6 +138,48 @@ namespace MoreUpipe
 
             EditorApplication.update += Tick;
             return completion.Task;
+        }
+
+        /// <summary>
+        /// How long a waiting command may poll, given the <c>timeout</c> the server hands it.
+        ///
+        /// WHY stop early: since com.unity.pipeline 0.9 a parameter named <c>timeout</c> is the request
+        /// timeout, and the server writes the time left into it. When it runs out the server answers
+        /// 504 itself, so a handler that waits the full amount never gets to report its own
+        /// <c>reason = "timeout"</c>. Keep a margin of a tenth of the budget, at most one second.
+        /// </summary>
+        internal static double UsableSeconds(double timeoutInSeconds)
+        {
+            if (double.IsPositiveInfinity(timeoutInSeconds))
+                return double.PositiveInfinity;
+
+            var margin = Math.Min(1.0, timeoutInSeconds * 0.1);
+            return Math.Max(0.1, timeoutInSeconds - margin);
+        }
+
+        static CommandInfo s_ScriptEval;
+
+        /// <summary>
+        /// The pipeline's <c>script eval</c> command, looked up through the public registry.
+        ///
+        /// WHY not call the eval class directly: since com.unity.pipeline 0.8 that class is internal.
+        /// The registry entry is public and survives the class being renamed or moved.
+        /// </summary>
+        static CommandInfo FindScriptEval()
+        {
+            if (s_ScriptEval != null)
+                return s_ScriptEval;
+
+            foreach (var command in CommandRegistry.DiscoverCommands())
+            {
+                if (command.Group == "script" && command.Name == "eval")
+                {
+                    s_ScriptEval = command;
+                    break;
+                }
+            }
+
+            return s_ScriptEval;
         }
     }
 }

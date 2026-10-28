@@ -40,7 +40,7 @@ namespace MoreUpipe
         public static async Task<object> Set(
             [CliArg("state", "Target state: play | stop.", Required = true)] string state = null,
             [CliArg("settle", "Wait until the transition completes. False returns as soon as it is requested.")] bool settle = true,
-            [CliArg("timeout", "Seconds to wait for the transition before giving up.")] float timeout = 60f)
+            [CliArg("timeout", "Seconds to wait for the transition before giving up. Also the request timeout.")] double timeoutInSeconds = 60)
         {
             bool target;
             switch ((state ?? string.Empty).Trim().ToLowerInvariant())
@@ -58,7 +58,7 @@ namespace MoreUpipe
                     return new { error = "'state' must be 'play' or 'stop'." };
             }
 
-            timeout = Math.Max(0.1f, timeout);
+            var timeout = WaitForCommand.UsableSeconds(timeoutInSeconds);
 
             var already = await OnMainThread(() => EditorApplication.isPlaying);
             if (already == target)
@@ -86,7 +86,7 @@ namespace MoreUpipe
                     settled = false,
                     reason = "domain reload",
                     detail = "Entering play mode reloads the domain, which drops this connection before it can answer. " +
-                             "Play mode was requested; confirm with editor_status, or wait_for a condition in the running scene. " +
+                             "Play mode was requested; confirm with 'unity command editor status', or wait_for a condition in the running scene. " +
                              "Disable Edit > Project Settings > Editor > Enter Play Mode Options > Reload Domain to make this wait work.",
                 };
 

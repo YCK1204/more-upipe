@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.3.0] - 2026-10-28
+
+Support for `com.unity.pipeline` 0.9, and the Unity CLI as the only client.
+Requires `com.unity.pipeline` 0.9.1-exp.1 or newer; stay on `v0.2.0` for 0.7 and older (0.8 is untested).
+
+### Fixed
+- **The package did not compile on Pipeline 0.8+.** `[CliCommand]` and `[CliArg]` moved to the
+  `Unity.Pipeline.Attributes` assembly (UUM-153151), so every command failed with `CS0246`. The asmdef
+  now references it.
+- **`wait_for` did not compile on Pipeline 0.8+.** It called `CodeEvalCommand.EvaluateCode`, which is
+  internal. It now finds the `script eval` command through the public `CommandRegistry` and invokes it.
+- **`wait_for` and `play_mode` never reported their own timeout.** Since Pipeline 0.9 a `timeout`
+  parameter is the request timeout and the server answers 504 when it runs out. Both now take it as
+  `double`, read the time left from it, and stop up to one second early to answer `reason: "timeout"`.
+
+### Patches
+- `console_filter` — anchors rewritten for 0.9.1 (`Get` with `since_session` and `GroundTruth`). With a
+  text filter it now searches the whole buffer and keeps the newest `tail` matches, so one noisy
+  warning can no longer push every match out of the window.
+- Removed `quiet_unknown_command` — Pipeline 0.9 suggests one close name on a typo (UUM-154017).
+- Removed `status_frame_count` — Pipeline 0.9 reports `frameCount` in `editor status` itself; applying
+  the patch now fails with `CS0102`.
+- Anchors are verified against 0.9.1-exp.1 (`VerifiedPipelineVersion`).
+
+### Removed
+- `Tools~/upipe` and its installers. Use `unity command <name>` from the Unity CLI.
+
 ## [0.2.0] - 2026-08-06
 
 UI Toolkit support, play-mode transitions, and a fix that made the existing patches applicable at all.

@@ -1,10 +1,10 @@
 # More Upipe
 
-Extra commands and opt-in patches for [`com.unity.pipeline`](https://docs.unity3d.com/Packages/com.unity.pipeline@0.4/manual/index.html).
+Extra commands and opt-in patches for [`com.unity.pipeline`](https://docs.unity3d.com/Packages/com.unity.pipeline@0.9/manual/index.html), called through the Unity CLI (`unity command <name>`).
 
 The Pipeline package lets a CLI or coding agent drive a running Unity Editor over HTTP. It ships ~140 commands, but nothing for the questions that dominate UI work — *which object is this, is it on, why isn't my click landing, why is my input ignored* — and its console command returns the whole buffer, which an agent pays for in full before discarding any of it.
 
-This package fills those gaps with ten commands and five patches.
+This package fills those gaps with ten commands and three patches.
 
 | Command | What it answers |
 |---|---|
@@ -22,12 +22,10 @@ This package fills those gaps with ten commands and five patches.
 | Patch | Effect |
 |---|---|
 | `console_filter` | Server-side `grep` and stack-trace suppression — measured 32 KB → 294 B |
-| `quiet_unknown_command` | A typo no longer echoes every command name back |
-| `status_frame_count` | `editor_status` reports `frameCount`, which reveals domain reloads |
 | `eval_usings` | `eval` compiles against UI Toolkit, so `Q()` and friends resolve |
 | `recompile_playmode_guard` | `recompile` refuses to silently wipe static state mid-play |
 
-The `ui_*` commands address uGUI. A UI Toolkit element is not a GameObject, carries no component and never appears in the scene hierarchy, so on a UI Toolkit project `ui_find` and `get_scene_hierarchy` both report the entire UI as a handful of empty `UIDocument` objects. The `uitk_*` commands are the counterpart set.
+The `ui_*` commands address uGUI. A UI Toolkit element is not a GameObject, carries no component and never appears in the scene hierarchy, so on a UI Toolkit project `ui_find` and `scene get_hierarchy` both report the entire UI as a handful of empty `UIDocument` objects. The `uitk_*` commands are the counterpart set.
 
 ## Why bother
 
@@ -98,7 +96,7 @@ Some gaps do not show up as bytes or milliseconds because stock has no answer at
 
 - **`eval` cannot see UI Toolkit.** The wrapper supplies five usings, none of them `UnityEngine.UIElements`, and the code is placed inside a method body so the caller cannot add one. `VisualElement`, `UIDocument` and `DisplayStyle` all fail with `CS0246`. → `eval_usings`
 - **Layout is one frame behind.** A measurement taken in the same call that changed a style reads stale — the fix is to issue the query twice and trust the second answer. → `uitk_style` waits
-- **A recompile during play silently resets every static.** The scene keeps running and `editor_status` still reports `playing`, so nothing anywhere says a domain reload happened; the failure surfaces later in whatever depended on that state. → `recompile_playmode_guard`, and `status_frame_count` to detect it after the fact
+- **A recompile during play silently resets every static.** The scene keeps running and `editor status` still reports `playing`, so nothing anywhere says a domain reload happened; the failure surfaces later in whatever depended on that state. → `recompile_playmode_guard`, and `editor status`'s `frameCount` (built into Pipeline 0.9) to detect it after the fact
 
 ### Honest caveats
 
@@ -112,52 +110,31 @@ Some gaps do not show up as bytes or milliseconds because stock has no answer at
 Unity Package Manager → **Add package from git URL**:
 
 ```
-https://github.com/YCK1204/more-upipe.git
+https://github.com/YCK1204/more-upipe.git#v0.3.0
 ```
 
 Or add to `Packages/manifest.json`:
 
 ```json
-"com.yck1204.more-upipe": "https://github.com/YCK1204/more-upipe.git"
+"com.yck1204.more-upipe": "https://github.com/YCK1204/more-upipe.git#v0.3.0"
 ```
 
-Requires `com.unity.pipeline` and `com.unity.ugui`, Unity 6.0 or newer. Editor-only — the assembly is excluded from builds, and on older Unity versions it is excluded from compilation entirely rather than failing to build.
+Pin a tag. Without one, Unity locks whatever commit was latest on first resolve and never picks up a newer one by itself.
 
-### The `upipe` client (optional)
+Requires `com.unity.pipeline` **0.9.1-exp.1 or newer** and `com.unity.ugui`, Unity 6.0 or newer. Editor-only — the assembly is excluded from builds, and on older Unity versions it is excluded from compilation entirely rather than failing to build. For `com.unity.pipeline` 0.7 and older, use `#v0.2.0`; 0.8 is untested.
 
-`Tools~/upipe` is a shell client for the Pipeline HTTP server. It is optional — every command here works through whatever client you already use — but it exists because the stock `unity` CLI cannot reach an editor across the WSL boundary: it validates the editor's process id, WSL cannot see a Windows pid, so it decides the descriptor is stale and deletes it. Talking to the HTTP server directly crosses that boundary without trouble.
+### Calling the commands
 
-The folder is named `Tools~`, so Unity ignores it: a shell script is not an asset and should not be imported, given a `.meta`, or compiled.
+Use the Unity CLI. The commands have no group, so Pipeline files them under `global` and they run by name alone:
 
 ```sh
-# macOS / Linux / WSL
-./Tools~/install.sh                 # installs to ~/.local/bin
-./Tools~/install.sh /usr/local/bin  # or somewhere else
-./Tools~/install.sh --uninstall
+unity command ui_find --name LoginButton          # or: unity command global ui_find ...
+unity command --query ui_                         # list this package's commands
 ```
 
-```bat
-:: Windows — installs into WSL if present, otherwise Git Bash
-Tools~\install.bat
-Tools~\install.bat --uninstall
-```
+`--timeout` is the request timeout, and `wait_for` / `play_mode` read the same value as their own wait budget. They stop a moment before it runs out so they can answer `reason: "timeout"` themselves instead of the server's 504.
 
-Needs `curl` and `python3`; the installer checks for both before copying anything. On Windows the script itself runs under WSL or Git Bash, not `cmd`.
-
-No configuration: `upipe` walks up from the working directory looking for `Library/Pipeline/.unity-pipeline-port`, so one install serves every project. `UPIPE_PROJECT` overrides that when you need to point at a project you are not standing in.
-
-```sh
-upipe status                       # server heartbeat
-upipe commands [filter]            # list command names
-upipe describe <name>              # parameters for one command
-upipe exec <cmd> [json | k=v ...]  # run any command; prints the result only
-upipe eval - <<'EOF'  ...  EOF     # C# from stdin, no quoting rules
-upipe rc [force]                   # recompile, refusing while playing
-upipe log [sev] [n] [grep]         # console; UPIPE_STACK=1 adds stack traces
-upipe play | stop                  # uses play_mode, so it waits for the transition
-```
-
-Two of these lean on what this package adds: `upipe rc` refuses during play whether or not `recompile_playmode_guard` is applied, and `upipe play`/`stop` use `play_mode` when it is installed and fall back to `editor_play`/`editor_stop` with a warning when it is not.
+The `upipe` shell client that 0.2.0 shipped in `Tools~/` is gone; the Unity CLI covers everything it did.
 
 ## Commands
 
@@ -224,7 +201,7 @@ unity command ui_tree --name LoginScreen --depth 2
 
 `[-]` the object itself is disabled. `[~]` the object is enabled but an ancestor is not — the case that tends to be missed. Output is indented text rather than nested JSON because a tree is read by a human or a model, and indentation carries the structure at a fraction of the tokens repeated JSON keys would cost.
 
-`get_scene_hierarchy` covers the whole scene; this scopes to the part being debugged.
+`scene get_hierarchy` covers the whole scene; this scopes to the part being debugged.
 
 ### `ui_click`
 
@@ -408,7 +385,7 @@ unity command wait_for \
 | `code` | **required** | Expression body evaluated each attempt. Must return a value |
 | `equals` | — | Succeed when the result equals this string |
 | `contains` | — | Succeed when the result contains this substring |
-| `timeout` | `60` | Seconds before giving up |
+| `timeout` | `60` | Seconds before giving up. This is also the request timeout; the CLI default is 30 |
 | `interval` | `1` | Seconds between attempts (floored at 0.1) |
 
 With neither `equals` nor `contains`, any result that is non-empty and not `"null"`/`"false"` counts as success — the common "wait until this stops being null" case.
@@ -421,7 +398,7 @@ A timeout returns `succeeded: false` with the last observed value rather than ra
 
 **Why it matters:** without this the caller polls, and every round-trip is a request/response pair the agent has to read. Waiting for a login to reach the lobby took 45 attempts in testing; as a client-side loop that is 45 responses, here it is one.
 
-Evaluation runs on the main thread through the Pipeline package's own eval facility, so anything expressible in `eval` works, including project types. The command is declared `MainThreadRequired = false` so the delay between attempts does not block the Editor.
+Evaluation runs on the main thread through the Pipeline package's own `script eval` command, found through the public `CommandRegistry`, so anything expressible in `eval` works, including project types. The command is declared `MainThreadRequired = false` so the delay between attempts does not block the Editor.
 
 ### `play_mode`
 
@@ -436,7 +413,7 @@ unity command play_mode --state play --settle false
 |---|---|---|
 | `state` | **required** | `play` or `stop` |
 | `settle` | `true` | Wait for the transition. `false` returns as soon as it is requested |
-| `timeout` | `60` | Seconds to wait before giving up |
+| `timeout` | `60` | Seconds to wait before giving up. This is also the request timeout; the CLI default is 30 |
 
 **Why this exists next to `editor_play` / `editor_stop`:** those set `EditorApplication.isPlaying` and return in the same call, but Unity applies the change at the end of the frame. The visible symptom is a pair of responses that contradict each other — `editor_stop` answers *Exited play mode*, and the `editor_play` issued right after answers *Already in play mode*, because the exit had not landed when the second command read the flag. The usual client-side fix is a fixed sleep sized for the worst case: dead time on every call, and still a guess.
 
@@ -453,7 +430,7 @@ Entering is different. A domain reload tears down the HTTP server along with the
   "detail": "Entering play mode reloads the domain, which drops this connection before it can answer. …" }
 ```
 
-Play mode still starts. Confirm with `editor_status`, or `wait_for` a condition in the running scene — which is the better wait anyway, since a scene that has entered play is usually not yet ready. With **Reload Domain** switched off in Project Settings, `settle` works in both directions.
+Play mode still starts. Confirm with `editor status`, or `wait_for` a condition in the running scene — which is the better wait anyway, since a scene that has entered play is usually not yet ready. With **Reload Domain** switched off in Project Settings, `settle` works in both directions.
 
 Requesting the state the Editor is already in is not an error; it returns `changed: false` with the current state.
 
@@ -465,9 +442,7 @@ Open **Tools > More Upipe > Patch Manager**, review, tick, apply. Nothing is app
 
 | Patch | Files | What changes |
 |---|---|---|
-| `console_filter` | `Runtime/Commands/ConsoleCommand.cs` | Adds `grep`, `grep_not` and `stack` to `console` |
-| `quiet_unknown_command` | `Runtime/Common/BasePipelineServer.cs` | A mistyped command name no longer echoes every registered name |
-| `status_frame_count` | `Editor/Commands/EditorStatusCommand.cs`, `Runtime/Models/StatusResponse.cs` | Adds `frameCount` to `editor_status` |
+| `console_filter` | `Runtime/Commands/ConsoleCommand.cs` | Adds `grep`, `grep_not` and `stack` to `console get` |
 | `eval_usings` | `Runtime/Compilation/EvalCodeCompiler.cs` | `eval` compiles against `UnityEngine.UIElements` and three more namespaces |
 | `recompile_playmode_guard` | `Editor/Commands/RecompileCommand.cs` | `recompile` refuses while playing unless `force=true` |
 
@@ -475,9 +450,9 @@ Open **Tools > More Upipe > Patch Manager**, review, tick, apply. Nothing is app
 
 Only Unity namespaces are added. Project namespaces are deliberately left out: they differ per project, and a using for a namespace that does not exist is a compile error on *every* eval — a convenience turned into a breakage.
 
-**`recompile_playmode_guard`.** A recompile during play triggers a domain reload. The scene survives, so the objects are still there and `editor_status` still reports playing — but every static field has been reset. A singleton read through `Instance` returns null while `FindObjectsByType` returns the very object it should have handed back, and nothing in any response says a reload happened. The failure surfaces later, in whatever command depended on that state.
+**`recompile_playmode_guard`.** A recompile during play triggers a domain reload. The scene survives, so the objects are still there and `editor status` still reports playing — but every static field has been reset. A singleton read through `Instance` returns null while `FindObjectsByType` returns the very object it should have handed back, and nothing in any response says a reload happened. The failure surfaces later, in whatever command depended on that state.
 
-`status_frame_count` makes the reload detectable after the fact; this makes the common cause avoidable. Refused calls answer plainly:
+`editor status`'s `frameCount` makes the reload detectable after the fact; this makes the common cause avoidable. Refused calls answer plainly:
 
 ```json
 { "status": "refused", "reason": "editor is playing",
@@ -492,7 +467,13 @@ Measured on one 40-entry console query:
 | `stack=false` | 24,720 |
 | `stack=false` + `grep` | 13,077 |
 
-The unknown-command error dropped from roughly 2 KB to a single line. `frameCount` matters because `editor_status` keeps reporting playMode `playing` after a domain reload has restarted the scene — the frame counter resets, so a value far below the last one means the world was rebuilt.
+With a text filter, `console_filter` searches the whole buffer and then keeps the newest `tail` matches. Filtering only the last `tail` entries would let one noisy warning fill the window: on a project logging the same warning hundreds of times a second, `--grep_not` would return nothing.
+
+```sh
+unity command console get --grep_not "Renderer at" --stack false --tail 20
+```
+
+Retired in 0.3.0 because Pipeline 0.9 does the same itself: `quiet_unknown_command` (a typo now answers with one suggestion, UUM-154017) and `status_frame_count` (`editor status` reports `frameCount` in Play mode).
 
 ### How it works
 
@@ -500,7 +481,7 @@ Each patch is one or more anchors plus replacements, not a diff against a known 
 
 - An anchor must occur **exactly once** in its file. Zero means the package source moved (or the patch is already applied); more than one means the anchor is not specific enough to place safely. Both refuse rather than guess.
 - Matching normalizes line endings to LF on both sides, and the patched file is written back with whatever endings it already used. The anchors live in C# verbatim strings, so they carry this repository's checkout endings, while the package source carries whatever Unity wrote into `PackageCache`. Without normalizing, a CRLF checkout against an LF package cache mismatches every multi-line anchor on its first newline — and reports it as `AnchorNotFound`, indistinguishable from the package genuinely having changed.
-- A patch may span several files — `status_frame_count` edits a command and its response model, and neither compiles without the other. They apply together or not at all, so "applied one half" is unrepresentable rather than merely discouraged.
+- A patch may span several files — for example a command and its response model, where neither compiles without the other. They apply together or not at all, so "applied one half" is unrepresentable rather than merely discouraged.
 - An applied patch leaves a marker comment (`// [MoreUpipe:<id>]`). That marker — read from the file, not from stored state — is the answer to "is this applied?".
 - The original file is copied to `<file>.moreupipe.orig` before the first write, and **Revert** restores it.
 - Nothing is written unless *every* selected patch is applicable.
@@ -508,12 +489,12 @@ Each patch is one or more anchors plus replacements, not a diff against a known 
 ### Things worth knowing before you apply
 
 - **Patched files live in `Library/PackageCache`, which Unity regenerates.** A package re-resolve silently restores the originals. That is why the patch state is re-checked each session and reported in the console — re-open the window and apply again.
-- **Patches are tied to a package version.** These anchors were taken from `com.unity.pipeline` 0.4.0-exp.1. On a different version an anchor may not match, in which case the patch reports `AnchorNotFound` and changes nothing. The commands themselves use only public API and are unaffected.
+- **Patches are tied to a package version.** These anchors were taken from `com.unity.pipeline` 0.9.1-exp.1. On a different version an anchor may not match, in which case the patch reports `AnchorNotFound` and changes nothing. The commands themselves use only public API and are unaffected.
 - **The alternative was embedding the whole package** under `Packages/`, which makes your project own 12 MB of third-party source and turns every package update into a manual merge. Re-applying a small, self-describing edit is the cheaper trade.
 
 ## Notes
 
-- Verified against `com.unity.pipeline` **0.4.0-exp.1** on Unity **6000.0.69f1**. That package is experimental and its API can change without notice — if a command stops registering after a package update, that is the first thing to check.
+- Verified against `com.unity.pipeline` **0.9.1-exp.1** on Unity **6000.7.0a6** (0.2.0 was verified against 0.4.0-exp.1 on 6000.0.69f1). That package is experimental and its API can change without notice — if a command stops registering after a package update, that is the first thing to check.
 - New `.cs` files are not picked up by a recompile alone. Trigger an asset import first (`Assets/Refresh`), then recompile.
 - Commands are discovered automatically via `TypeCache`; there is no registration step.
 - The pipeline `eval` command caps `timeout` at 30000 ms. Larger values fail with a bare `Bad Request` whose real reason only appears in `errorDetails`.

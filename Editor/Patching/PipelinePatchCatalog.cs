@@ -16,8 +16,6 @@ namespace MoreUpipe.Patching
         public static readonly IReadOnlyList<PipelinePatch> All = new[]
         {
             ConsoleFilter,
-            QuietUnknownCommand,
-            StatusFrameCount,
             EvalUsings,
             RecompilePlayModeGuard,
         };
@@ -40,10 +38,11 @@ namespace MoreUpipe.Patching
             new PatchEdit(
                 relativePath: "Runtime/Commands/ConsoleCommand.cs",
                 anchor:
-@"        public static ConsoleLogResponse GetConsole(
+@"        public static ConsoleLogResponse Get(
             [CliArg(""tail"", ""Maximum number of most-recent entries to return"")] int tail = DefaultTail,
             [CliArg(""level"", ""Minimum severity to include: log | warn | error"")] string level = ConsoleLogBuffer.LevelLog,
-            [CliArg(""since"", ""Cursor: only return entries newer than this seq. Use the 'cursor' from a previous response to follow."")] long since = -1)
+            [CliArg(""since"", ""Cursor: only return entries newer than this seq. Use the 'cursor' from a previous response to follow."")] long since = -1,
+            [CliArg(""since_session"", ""Session the 'since' cursor came from: pass the 'session' from a previous response. A cursor from another session is refused and the tail returned with reset=true."")] string since_session = null)
         {
             // Guard against nonsensical tail values; <= 0 would otherwise mean ""unlimited"" in the
             // buffer, which is not what a caller passing e.g. --tail 0 expects.
@@ -51,13 +50,16 @@ namespace MoreUpipe.Patching
                 tail = DefaultTail;
 
             var minSeverity = ConsoleLogBuffer.SeverityFromLevelName(level);
-            return ConsoleLogCapture.Buffer.Query(since, tail, minSeverity);
+            var response = ConsoleLogCapture.Buffer.Query(since, tail, minSeverity, since_session);
+            response.GroundTruth = ReadGroundTruth();
+            return response;
         }",
                 replacement:
-@"        public static ConsoleLogResponse GetConsole(
+@"        public static ConsoleLogResponse Get(
             [CliArg(""tail"", ""Maximum number of most-recent entries to return"")] int tail = DefaultTail,
             [CliArg(""level"", ""Minimum severity to include: log | warn | error"")] string level = ConsoleLogBuffer.LevelLog,
             [CliArg(""since"", ""Cursor: only return entries newer than this seq. Use the 'cursor' from a previous response to follow."")] long since = -1,
+            [CliArg(""since_session"", ""Session the 'since' cursor came from: pass the 'session' from a previous response. A cursor from another session is refused and the tail returned with reset=true."")] string since_session = null,
             [CliArg(""grep"", ""Only return entries whose message or stack trace contains this text (case-insensitive)."")] string grep = null,
             [CliArg(""grep_not"", ""Drop entries whose message or stack trace contains this text (case-insensitive)."")] string grepNot = null,
             [CliArg(""stack"", ""Include stack traces. Set false to strip them from the response."")] bool stack = true)
@@ -67,13 +69,17 @@ namespace MoreUpipe.Patching
             if (tail <= 0)
                 tail = DefaultTail;
 
+            var hasTextFilter = !string.IsNullOrEmpty(grep) || !string.IsNullOrEmpty(grepNot);
+
+            // A text filter reads the whole buffer and keeps the newest 'tail' matches. Cutting to
+            // 'tail' first would let one noisy warning fill the window and leave nothing to match.
             var minSeverity = ConsoleLogBuffer.SeverityFromLevelName(level);
-            var response = ConsoleLogCapture.Buffer.Query(since, tail, minSeverity);
+            var response = ConsoleLogCapture.Buffer.Query(since, hasTextFilter ? 0 : tail, minSeverity, since_session);
+            response.GroundTruth = ReadGroundTruth();
 
             if (response?.Entries == null)
                 return response;
 
-            var hasTextFilter = !string.IsNullOrEmpty(grep) || !string.IsNullOrEmpty(grepNot);
             if (!hasTextFilter && stack)
                 return response;
 
@@ -102,81 +108,13 @@ namespace MoreUpipe.Patching
                 kept.Add(entry);
             }
 
+            if (kept.Count > tail)
+                kept.RemoveRange(0, kept.Count - tail);
+
             response.Entries = kept.ToArray();
             response.Returned = kept.Count;
             return response;
         }"));
-
-        /// <summary>
-        /// Stop an unknown command name from echoing the entire command list back.
-        ///
-        /// The original error embeds every registered command — around 2 KB of names for a single typo
-        /// — and that text also lands in the Editor console, so it keeps resurfacing in later log
-        /// queries. The replacement keeps the diagnosis useful by listing only names that resemble what
-        /// was asked for.
-        /// </summary>
-        public static PipelinePatch QuietUnknownCommand => new PipelinePatch(
-            id: "quiet_unknown_command",
-            title: "Unknown command: suggest instead of dumping every name",
-            description: "A mistyped command name currently returns the full command list (about 2 KB) and logs it to the " +
-                         "console as well. This returns only similar names.",
-            new PatchEdit(
-                relativePath: "Runtime/Common/BasePipelineServer.cs",
-                anchor:
-@"                var availableCommands = string.Join("", "", commands.Select(c => c.Name));
-                var errorMessage = $""No command named '{commandName}' is available. Available: [{availableCommands}]"";",
-                replacement:
-@"                var similar = commands
-                    .Select(c => c.Name)
-                    .Where(n => n.IndexOf(commandName ?? string.Empty, System.StringComparison.OrdinalIgnoreCase) >= 0
-                                || (commandName != null && commandName.IndexOf(n, System.StringComparison.OrdinalIgnoreCase) >= 0))
-                    .Take(5)
-                    .ToList();
-
-                var availableCommands = similar.Count > 0
-                    ? string.Join("", "", similar)
-                    : $""{commands.Count} commands registered; call /api/commands for the list"";
-                var errorMessage = $""No command named '{commandName}' is available. Did you mean: [{availableCommands}]"";"));
-
-        /// <summary>
-        /// Expose the frame counter through <c>editor_status</c>.
-        ///
-        /// <c>editor_status</c> keeps reporting playMode "playing" after a domain reload has restarted
-        /// the scene, so a caller polling it believes the session it set up is still there while every
-        /// object in it is gone. Frame count is the cheapest signal that separates the two: it resets,
-        /// so a value far below the last observed one means the world was rebuilt.
-        ///
-        /// The command and its response model are edited together — either alone does not compile.
-        /// </summary>
-        public static PipelinePatch StatusFrameCount => new PipelinePatch(
-            id: "status_frame_count",
-            title: "editor_status: report frame count",
-            description: "Adds 'frameCount' to editor_status. playMode still reads 'playing' after a domain reload restarts " +
-                         "the scene; a frame count that dropped is how you detect the session was rebuilt.",
-            new PatchEdit(
-                relativePath: "Editor/Commands/EditorStatusCommand.cs",
-                anchor:
-@"                ProjectPath = Path.GetDirectoryName(Application.dataPath),
-                UnityVersion = Application.unityVersion",
-                replacement:
-@"                ProjectPath = Path.GetDirectoryName(Application.dataPath),
-                UnityVersion = Application.unityVersion,
-                FrameCount = Time.frameCount"),
-            new PatchEdit(
-                relativePath: "Runtime/Models/StatusResponse.cs",
-                anchor:
-@"        [JsonProperty(""unityVersion"")]
-        public string UnityVersion { get; set; }",
-                replacement:
-@"        [JsonProperty(""unityVersion"")]
-        public string UnityVersion { get; set; }
-
-        /// <summary>
-        /// Frames rendered since startup. Resets when a domain reload restarts the scene, which
-        /// playMode alone does not reveal.
-        /// </summary>
-        [JsonProperty(""frameCount"")]
-        public int FrameCount { get; set; }"));
 
         /// <summary>
         /// Widen the using directives that <c>eval</c> compiles user code against.
@@ -251,7 +189,7 @@ using UnityEngine.SceneManagement;
         /// the response says a reload happened. The failure surfaces later, in whatever command
         /// depended on that state, which is the worst place to discover it.
         ///
-        /// <c>status_frame_count</c> makes the reload detectable after the fact. This makes the common
+        /// <c>editor_status</c>'s <c>frameCount</c> makes the reload detectable after the fact. This makes the common
         /// cause avoidable: stop, recompile, play. The escape hatch stays for callers who know what
         /// they are doing.
         /// </summary>

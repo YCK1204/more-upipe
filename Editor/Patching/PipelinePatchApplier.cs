@@ -57,7 +57,7 @@ namespace MoreUpipe.Patching
         public const string PipelinePackageName = "com.unity.pipeline";
 
         /// <summary>Package version this patch set was authored and verified against.</summary>
-        public const string VerifiedPipelineVersion = "0.4.0-exp.1";
+        public const string VerifiedPipelineVersion = "0.9.1-exp.1";
 
         const string BackupSuffix = ".moreupipe.orig";
 
