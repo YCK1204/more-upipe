@@ -10,7 +10,7 @@ namespace MoreUpipe
     /// <summary>
     /// Print the hierarchy under one object as an indented tree.
     ///
-    /// <c>ui_find</c> answers "where is this object"; this answers "what is under here". The built-in
+    /// <c>ugui find</c> answers "where is this object"; this answers "what is under here". The built-in
     /// <c>get_scene_hierarchy</c> covers the whole scene, which for a UI question is mostly payload the
     /// caller did not ask for — an agent pays for every line of it. Scoping to a subtree and capping
     /// the depth keeps the answer to the part being debugged.
@@ -28,7 +28,7 @@ namespace MoreUpipe
         /// switched off. <c>[-]</c> means the object itself is disabled; <c>[~]</c> means it is enabled
         /// but an ancestor is not, which is the case that tends to be missed.
         /// </summary>
-        [CliCommand("ui_tree", "Print the hierarchy under an object as an indented tree, inactive objects included.")]
+        [CliCommand("ugui.tree", "Print the hierarchy under an object as an indented tree, inactive objects included.")]
         public static object Dump(
             [CliArg("path", "Full hierarchy path of the root. Takes precedence over name.")] string path = null,
             [CliArg("name", "Object name to use as the root. Used when no path is given.")] string name = null,
@@ -125,7 +125,7 @@ namespace MoreUpipe
 
         static List<Transform> FindRoots(string path, string name)
         {
-            var all = Object.FindObjectsByType<Transform>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+            var all = SceneObjects.All<Transform>();
 
             if (!string.IsNullOrEmpty(path))
                 return all.Where(transform => HierarchyPath(transform) == path).ToList();

@@ -26,10 +26,10 @@ namespace MoreUpipe
         /// Assign text to an input field and fire its change callbacks.
         ///
         /// Ambiguous names are reported rather than resolved, for the same reason
-        /// <c>ui_click</c> refuses them: typing into the wrong field of a login form looks like a
+        /// <c>ugui click</c> refuses them: typing into the wrong field of a login form looks like a
         /// success and fails somewhere else entirely.
         /// </summary>
-        [CliCommand("ui_input", "Set an InputField / TMP_InputField's text and fire its change callbacks.")]
+        [CliCommand("ugui.input", "Set an InputField / TMP_InputField's text and fire its change callbacks.")]
         public static object SetText(
             [CliArg("path", "Full hierarchy path of the input field. Takes precedence over name.")] string path = null,
             [CliArg("name", "Object name. Used when no path is given.")] string name = null,
@@ -101,7 +101,7 @@ namespace MoreUpipe
 
         static List<Transform> FindFields(string path, string name)
         {
-            var all = Object.FindObjectsByType<Transform>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+            var all = SceneObjects.All<Transform>();
 
             if (!string.IsNullOrEmpty(path))
                 return all.Where(transform => HierarchyPath(transform) == path).ToList();

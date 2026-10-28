@@ -31,7 +31,7 @@ namespace MoreUpipe
         /// response reports whether the cap truncated the sweep, so a silent cut never reads as
         /// "nothing else matched".
         /// </summary>
-        [CliCommand("ui_find",
+        [CliCommand("ugui.find",
             "Find scene objects by name or visible label, inactive included. Returns hierarchy path and active state.")]
         public static object Find(
             [CliArg("name", "Object name to match. Substring unless exact=true.")] string name = null,
@@ -44,7 +44,7 @@ namespace MoreUpipe
                 return new { error = "Supply at least one of 'name' or 'label'." };
 
             var results = new List<object>();
-            var all = Object.FindObjectsByType<Transform>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+            var all = SceneObjects.All<Transform>();
 
             foreach (var transform in all)
             {

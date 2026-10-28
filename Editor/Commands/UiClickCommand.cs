@@ -31,7 +31,7 @@ namespace MoreUpipe
         /// click alone leaves them half-driven. Inactive objects are rejected rather than clicked:
         /// clicking something the player cannot see is a false positive that hides the real bug.
         /// </summary>
-        [CliCommand("ui_click", "Click a UI object by path or name via ExecuteEvents (works with the legacy input module).")]
+        [CliCommand("ugui.click", "Click a UI object by path or name via ExecuteEvents (works with the legacy input module).")]
         public static object Click(
             [CliArg("path", "Full hierarchy path ('Root/Child/Button'). Takes precedence over name.")] string path = null,
             [CliArg("name", "Object name. Used when no path is given; ambiguous names are reported instead of guessed.")] string name = null)
@@ -85,7 +85,7 @@ namespace MoreUpipe
         /// first hit, so anything sitting above the intended target — a full-screen cover, a loading
         /// overlay, a stray raycast-enabled image — shows up here as entry zero.
         /// </summary>
-        [CliCommand("ui_raycast", "List UI objects under a screen point, topmost first. Shows what intercepts a click.")]
+        [CliCommand("ugui.raycast", "List UI objects under a screen point, topmost first. Shows what intercepts a click.")]
         public static object Raycast(
             [CliArg("x", "Screen X in pixels, origin bottom-left.")] float x = 0f,
             [CliArg("y", "Screen Y in pixels, origin bottom-left.")] float y = 0f)
@@ -114,7 +114,7 @@ namespace MoreUpipe
 
         static List<Transform> FindTargets(string path, string name)
         {
-            var all = Object.FindObjectsByType<Transform>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+            var all = SceneObjects.All<Transform>();
 
             if (!string.IsNullOrEmpty(path))
                 return all.Where(transform => HierarchyPath(transform) == path).ToList();

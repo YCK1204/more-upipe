@@ -8,13 +8,13 @@ namespace MoreUpipe
     /// <summary>
     /// Print the UI Toolkit element tree under a panel or a named element.
     ///
-    /// This is <c>ui_tree</c>'s counterpart for UI Toolkit. It walks
+    /// This is <c>ugui tree</c>'s counterpart for UI Toolkit. It walks
     /// <see cref="VisualElement.hierarchy"/> rather than <c>Children()</c>, so the generated parts of a
     /// composite control are visible — the checkmark a Toggle attaches, the scroller a ScrollView owns.
     /// Those parts are usually the answer when a widget renders wrong, and the content-container view
     /// hides them.
     ///
-    /// Output is indented text rather than nested JSON for the same reason <c>ui_tree</c> gives:
+    /// Output is indented text rather than nested JSON for the same reason <c>ugui tree</c> gives:
     /// indentation carries the structure at a fraction of what repeated JSON keys cost, and a tree is
     /// read rather than parsed.
     /// </summary>
@@ -23,11 +23,11 @@ namespace MoreUpipe
         /// <summary>
         /// Dump the subtree under <paramref name="name"/>, or the whole panel when no name is given.
         ///
-        /// Markers mirror <c>ui_tree</c>: <c>[-]</c> the element itself is hidden, <c>[~]</c> the
+        /// Markers mirror <c>ugui tree</c>: <c>[-]</c> the element itself is hidden, <c>[~]</c> the
         /// element is fine but an ancestor is hidden. The second case is the one that gets missed,
         /// because everything about the element reads correct in isolation.
         /// </summary>
-        [CliCommand("uitk_tree",
+        [CliCommand("uitk.tree",
             "Print the UI Toolkit element tree under a panel or element, marking what is hidden and why.")]
         public static object Tree(
             [CliArg("name", "Root element name. Omit for the whole panel.")] string name = null,

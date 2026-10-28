@@ -2,16 +2,40 @@
 
 ## [0.3.0] - 2026-10-28
 
-Support for `com.unity.pipeline` 0.9, and the Unity CLI as the only client.
+Support for `com.unity.pipeline` 0.9, a `qa` command group for the after-every-change loop, grouped
+command names, and the Unity CLI as the only client.
 Requires `com.unity.pipeline` 0.9.1-exp.1 or newer; stay on `v0.2.0` for 0.7 and older (0.8 is untested).
+
+### Commands
+- `qa check` — Editor state, compile errors, console totals and the newest distinct errors in one call.
+- `qa log` — the Editor console filtered on the server (`level`, `grep`/`grep_not` with `|` alternatives,
+  `since` cursor), repeats collapsed into one line with a `count`, stack traces off unless asked.
+  Reads `UnityEditor.LogEntries`, so compile errors are included and the Console window's level
+  toggles do not hide anything.
+- `qa tests` — run tests and answer with counts and failures only (one-line message and
+  `Assets/…:line` each). Exits non-zero on a failure, a timeout or no match unless `strict=false`.
+  Every run is numbered and the command only accepts its own run's result. `failed=true` runs the
+  tests known to be failing.
+- `qa test_result` — the last finished run's summary, recorded in `SessionState`, so the result of a
+  run whose connection a domain reload dropped can still be read.
+- `qa test_list` — test inventory grouped by fixture with counts.
+- Measured on a 2,100-test project: console errors 10,058 → 92 tokens, a passing fixture 523 → 32, the
+  whole suite's failures 44,519 (cut to 6 of 20) → 1,900 (all 20), the test inventory 149,058 → 1,421.
+
+### Changed
+- **Command names are grouped**, the way Pipeline 0.9 names its own: `ugui find|tree|click|input|raycast`,
+  `uitk find|tree|style`, `wait until`, `wait playmode` (were `ui_*`, `uitk_*`, `wait_for`, `play_mode`).
+- `com.unity.test-framework` is a dependency (for the `qa` test commands).
+- The obsolete `FindObjectsByType` sort-mode overload is called from one place with the warning
+  silenced, so the package compiles without `CS0618` warnings on Unity 6.x.
 
 ### Fixed
 - **The package did not compile on Pipeline 0.8+.** `[CliCommand]` and `[CliArg]` moved to the
   `Unity.Pipeline.Attributes` assembly (UUM-153151), so every command failed with `CS0246`. The asmdef
   now references it.
-- **`wait_for` did not compile on Pipeline 0.8+.** It called `CodeEvalCommand.EvaluateCode`, which is
+- **`wait until` (was `wait_for`) did not compile on Pipeline 0.8+.** It called `CodeEvalCommand.EvaluateCode`, which is
   internal. It now finds the `script eval` command through the public `CommandRegistry` and invokes it.
-- **`wait_for` and `play_mode` never reported their own timeout.** Since Pipeline 0.9 a `timeout`
+- **`wait until` and `wait playmode` never reported their own timeout.** Since Pipeline 0.9 a `timeout`
   parameter is the request timeout and the server answers 504 when it runs out. Both now take it as
   `double`, read the time left from it, and stop up to one second early to answer `reason: "timeout"`.
 

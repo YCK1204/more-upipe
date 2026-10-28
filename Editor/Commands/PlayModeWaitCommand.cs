@@ -34,7 +34,7 @@ namespace MoreUpipe
         /// <c>changed: false</c> — asking twice is not an error, and the caller usually cares about
         /// the resulting state rather than about having caused it.
         /// </summary>
-        [CliCommand("play_mode",
+        [CliCommand("wait.playmode",
             "Enter or exit play mode and wait for the transition to complete, instead of returning before it happens.",
             MainThreadRequired = false)]
         public static async Task<object> Set(
@@ -86,7 +86,7 @@ namespace MoreUpipe
                     settled = false,
                     reason = "domain reload",
                     detail = "Entering play mode reloads the domain, which drops this connection before it can answer. " +
-                             "Play mode was requested; confirm with 'unity command editor status', or wait_for a condition in the running scene. " +
+                             "Play mode was requested; confirm with 'unity command editor status', or 'unity command wait until' a condition in the running scene. " +
                              "Disable Edit > Project Settings > Editor > Enter Play Mode Options > Reload Domain to make this wait work.",
                 };
 

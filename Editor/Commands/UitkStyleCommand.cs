@@ -31,7 +31,7 @@ namespace MoreUpipe
         /// across documents, and measuring the wrong one produces a confident answer about the wrong
         /// element. Pass <paramref name="document"/> to disambiguate.
         /// </summary>
-        [CliCommand("uitk_style",
+        [CliCommand("uitk.style",
             "Read a UI Toolkit element's resolved style and layout box, after waiting for the panel to lay out.",
             MainThreadRequired = false)]
         public static async Task<object> Style(

@@ -7,9 +7,9 @@ namespace MoreUpipe
     /// <summary>
     /// Locate UI Toolkit elements by name, USS class or visible text, across every runtime panel.
     ///
-    /// WHY the <c>ui_*</c> commands do not cover this: they address uGUI — <c>GameObject</c>,
+    /// WHY the <c>ugui *</c> commands do not cover this: they address uGUI — <c>GameObject</c>,
     /// <c>UI.Text</c>, <c>GraphicRaycaster</c>. A UI Toolkit element is not a GameObject, carries no
-    /// component, and never appears in the scene hierarchy, so <c>ui_find</c> and
+    /// component, and never appears in the scene hierarchy, so <c>ugui find</c> and
     /// <c>get_scene_hierarchy</c> both report a project's entire UI as a handful of
     /// <c>UIDocument</c> objects with nothing inside.
     ///
@@ -32,7 +32,7 @@ namespace MoreUpipe
         /// class names are a fixed vocabulary and a substring match on them mostly returns modifiers of
         /// unrelated blocks.
         /// </summary>
-        [CliCommand("uitk_find",
+        [CliCommand("uitk.find",
             "Find UI Toolkit elements by name, USS class or text. Reports layout, display and which ancestor hid them.")]
         public static object Find(
             [CliArg("name", "Element name to match. Substring unless exact=true.")] string name = null,

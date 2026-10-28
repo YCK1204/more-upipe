@@ -7,7 +7,7 @@ namespace MoreUpipe
 {
     /// <summary>
     /// Shared lookup for the runtime UI Toolkit panels in the loaded scenes, plus the element helpers
-    /// the <c>uitk_*</c> commands agree on.
+    /// the <c>uitk *</c> commands agree on.
     ///
     /// WHY panels are reached through <see cref="UIDocument"/> rather than the panel registry: the
     /// registry (<c>UIElementsRuntimeUtility</c>) is internal, so any access is reflection that breaks
@@ -46,7 +46,7 @@ namespace MoreUpipe
         {
             var panels = new List<Panel>();
 
-            foreach (var doc in Object.FindObjectsByType<UIDocument>(FindObjectsInactive.Include, FindObjectsSortMode.None))
+            foreach (var doc in SceneObjects.All<UIDocument>())
             {
                 if (doc == null)
                     continue;

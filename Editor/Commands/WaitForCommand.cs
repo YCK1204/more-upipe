@@ -34,7 +34,7 @@ namespace MoreUpipe
         /// raised as an error — a wait that ran out is a result, not a malfunction, and the last value
         /// is usually what explains why.
         /// </summary>
-        [CliCommand("wait_for", "Poll a C# expression until it matches, then return. Replaces client-side polling loops.",
+        [CliCommand("wait.until", "Poll a C# expression until it matches, then return. Replaces client-side polling loops.",
             MainThreadRequired = false)]
         public static async Task<object> Wait(
             [CliArg("code", "C# expression body to evaluate each attempt. Must return a value.", Required = true)] string code = null,

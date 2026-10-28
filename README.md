@@ -4,20 +4,28 @@ Extra commands and opt-in patches for [`com.unity.pipeline`](https://docs.unity3
 
 The Pipeline package lets a CLI or coding agent drive a running Unity Editor over HTTP. It ships ~140 commands, but nothing for the questions that dominate UI work — *which object is this, is it on, why isn't my click landing, why is my input ignored* — and its console command returns the whole buffer, which an agent pays for in full before discarding any of it.
 
-This package fills those gaps with ten commands and three patches.
+This package fills those gaps with fifteen commands in four groups and three patches.
 
-| Command | What it answers |
+| QA command | What it answers |
 |---|---|
-| `ui_find` | Where is this object, is it active — **including inactive objects** |
-| `ui_tree` | What is under this object, and which branch is switched off |
-| `ui_click` | Click a UI object, working around the legacy input module |
-| `ui_input` | Set an input field's text **and fire its change callbacks** |
-| `ui_raycast` | What sits under this screen point — i.e. what is eating the click |
-| `uitk_find` | The same questions for **UI Toolkit**, which the above cannot reach |
-| `uitk_tree` | What is under this element, including a control's generated parts |
-| `uitk_style` | Resolved style and layout box, **measured after the panel lays out** |
-| `wait_for` | Block until a condition holds, instead of polling from the client |
-| `play_mode` | Enter or leave play mode and return once it actually happened |
+| `qa check` | Did it compile, is the Editor ready, what is throwing — in one call |
+| `qa log` | The Editor console filtered on the server, **repeats collapsed into one line with a count** |
+| `qa tests` | Run tests, answer with **counts and failures only**; **non-zero exit** when anything fails |
+| `qa test_result` | The last run's summary, numbered — the way back after a dropped connection |
+| `qa test_list` | Test inventory by fixture with counts, never the per-test records |
+
+| UI and wait command | What it answers |
+|---|---|
+| `ugui find` | Where is this object, is it active — **including inactive objects** |
+| `ugui tree` | What is under this object, and which branch is switched off |
+| `ugui click` | Click a UI object, working around the legacy input module |
+| `ugui input` | Set an input field's text **and fire its change callbacks** |
+| `ugui raycast` | What sits under this screen point — i.e. what is eating the click |
+| `uitk find` | The same questions for **UI Toolkit**, which the above cannot reach |
+| `uitk tree` | What is under this element, including a control's generated parts |
+| `uitk style` | Resolved style and layout box, **measured after the panel lays out** |
+| `wait until` | Block until a condition holds, instead of polling from the client |
+| `wait playmode` | Enter or leave play mode and return once it actually happened |
 
 | Patch | Effect |
 |---|---|
@@ -25,7 +33,7 @@ This package fills those gaps with ten commands and three patches.
 | `eval_usings` | `eval` compiles against UI Toolkit, so `Q()` and friends resolve |
 | `recompile_playmode_guard` | `recompile` refuses to silently wipe static state mid-play |
 
-The `ui_*` commands address uGUI. A UI Toolkit element is not a GameObject, carries no component and never appears in the scene hierarchy, so on a UI Toolkit project `ui_find` and `scene get_hierarchy` both report the entire UI as a handful of empty `UIDocument` objects. The `uitk_*` commands are the counterpart set.
+The `ugui *` commands address uGUI. A UI Toolkit element is not a GameObject, carries no component and never appears in the scene hierarchy, so on a UI Toolkit project `ugui find` and `scene get_hierarchy` both report the entire UI as a handful of empty `UIDocument` objects. The `uitk *` commands are the counterpart set.
 
 ## Why bother
 
@@ -48,8 +56,8 @@ foreach (var d in docs) {
 
 | Question | Stock (`eval` source) | This package | Saved |
 |---|---|---|---|
-| Find one element | 753 B | `uitk_find name=TitleLabel` — 25 B | **97%** |
-| Dump a subtree | 1,329 B | `uitk_tree name=DetailPanel depth=3 size=true` — 48 B | **96%** |
+| Find one element | 753 B | `uitk find name=TitleLabel` — 25 B | **97%** |
+| Dump a subtree | 1,329 B | `uitk tree name=DetailPanel depth=3 size=true` — 48 B | **96%** |
 
 The C# is also written fresh each time, so it carries the risk of being wrong — and a compile error costs another round-trip before any answer arrives.
 
@@ -62,7 +70,7 @@ The C# is also written fresh each time, so it carries the risk of being wrong �
 | Find one element | 592 B | 928 B | *−57%* |
 | Dump a subtree | 909 B | 991 B | *−9%* |
 
-The last two are **larger**, deliberately: `uitk_find` also reports the USS class list, which ancestor hid the element, and how many documents it searched. Getting the same out of `eval` means a longer query or a second call.
+The last two are **larger**, deliberately: `uitk find` also reports the USS class list, which ancestor hid the element, and how many documents it searched. Getting the same out of `eval` means a longer query or a second call.
 
 The console figure is the one that matters most, because it is paid on every log query. During measurement the project's buffer turned out to be filled by a per-frame warning:
 
@@ -88,19 +96,19 @@ All forty entries were that one message. Stock, the only way to look past it is 
 
 The first two are faster because stock `eval` compiles through Roslyn on every call, while a registered command is already compiled.
 
-The third is not really a speed difference. `editor_stop` returns before the transition happens, so the caller cannot tell when it is safe to continue and covers the worst case with a fixed sleep. The transition itself takes about a second; the other thirty-four are insurance against not knowing. `play_mode` returns when the state is actually there.
+The third is not really a speed difference. `editor_stop` returns before the transition happens, so the caller cannot tell when it is safe to continue and covers the worst case with a fixed sleep. The transition itself takes about a second; the other thirty-four are insurance against not knowing. `wait playmode` returns when the state is actually there.
 
 ### Things that are not slow, just impossible
 
 Some gaps do not show up as bytes or milliseconds because stock has no answer at all.
 
 - **`eval` cannot see UI Toolkit.** The wrapper supplies five usings, none of them `UnityEngine.UIElements`, and the code is placed inside a method body so the caller cannot add one. `VisualElement`, `UIDocument` and `DisplayStyle` all fail with `CS0246`. → `eval_usings`
-- **Layout is one frame behind.** A measurement taken in the same call that changed a style reads stale — the fix is to issue the query twice and trust the second answer. → `uitk_style` waits
+- **Layout is one frame behind.** A measurement taken in the same call that changed a style reads stale — the fix is to issue the query twice and trust the second answer. → `uitk style` waits
 - **A recompile during play silently resets every static.** The scene keeps running and `editor status` still reports `playing`, so nothing anywhere says a domain reload happened; the failure surfaces later in whatever depended on that state. → `recompile_playmode_guard`, and `editor status`'s `frameCount` (built into Pipeline 0.9) to detect it after the fact
 
 ### Honest caveats
 
-- Two of the four response sizes got **bigger**, for the reason given above. If payload size is the only thing being optimised, `uitk_find`'s extra fields are not free.
+- Two of the four response sizes got **bigger**, for the reason given above. If payload size is the only thing being optimised, `uitk find`'s extra fields are not free.
 - The console and unknown-command figures depend on how noisy the project is. A quiet console has less to filter.
 - The 35-second figure is what a caller *chooses* when it cannot know; a project with Reload Domain switched off can wait on both directions properly and would see a smaller gap.
 - Everything here is one project on one machine.
@@ -125,27 +133,67 @@ Requires `com.unity.pipeline` **0.9.1-exp.1 or newer** and `com.unity.ugui`, Uni
 
 ### Calling the commands
 
-Use the Unity CLI. The commands have no group, so Pipeline files them under `global` and they run by name alone:
+Use the Unity CLI. Commands are grouped the way Pipeline 0.9 groups its own (`unity command <group> <name>`):
 
 ```sh
-unity command ui_find --name LoginButton          # or: unity command global ui_find ...
-unity command --query ui_                         # list this package's commands
+unity command qa check
+unity command ugui find --name LoginButton --omit-nulls
+unity command --tag "" --query "qa "              # list a group's commands
 ```
 
-`--timeout` is the request timeout, and `wait_for` / `play_mode` read the same value as their own wait budget. They stop a moment before it runs out so they can answer `reason: "timeout"` themselves instead of the server's 504.
+`--omit-nulls` and `--result-only` are Pipeline-wide flags worth passing from scripts: the first drops empty fields, the second drops the request envelope.
+
+`--timeout` is the request timeout, and the commands that wait (`qa tests`, `qa test_list`, `wait until`, `wait playmode`) read the same value as their own budget. They stop a moment before it runs out so they can answer `reason: "timeout"` themselves instead of the server's 504. The CLI default is 30 seconds; pass more for a long test suite.
 
 The `upipe` shell client that 0.2.0 shipped in `Tools~/` is gone; the Unity CLI covers everything it did.
 
+| 0.2.0 name | 0.3.0 name |
+|---|---|
+| `ui_find` `ui_tree` `ui_click` `ui_input` `ui_raycast` | `ugui find` `ugui tree` `ugui click` `ugui input` `ugui raycast` |
+| `uitk_find` `uitk_tree` `uitk_style` | `uitk find` `uitk tree` `uitk style` |
+| `wait_for` `play_mode` | `wait until` `wait playmode` |
+
+## The QA loop
+
+After a code change an agent asks the same three questions every time: did it compile, did anything throw, do the tests pass. Stock, each is a separate call of about two seconds whose answer is sized for a human scrolling a window. The `qa` group answers each in one call and leaves out everything that is not a problem.
+
+```sh
+unity recompile --project-path . --json        # compile; errors come back here
+unity status --until-ready --project-path .    # wait out the domain reload
+unity command qa check --result-only           # state + compile errors + distinct runtime errors
+unity command qa tests --filter MyFixture --result-only
+```
+
+Measured on a 2,100-test project (Unity 6000.7.0a6, Pipeline 0.9.1-exp.1). Tokens are estimated from the output size.
+
+| Question | Stock | `qa` | Tokens |
+|---|---|---|---|
+| Newest errors in the console | `console get --level error --tail 20` | `qa log` | 10,058 → **92** |
+| State + compile + errors | 3 calls (`editor status`, `script recompile_status`, `console get`) | `qa check` | 3 calls → **1 call, 97** |
+| One fixture, 8 tests, all pass | `test run --filter …` | `qa tests --filter …` | 523 → **32** |
+| One fixture, 4 of 37 fail | `test run --filter …` (exit 0) | `qa tests --filter …` (exit 6) | 3,373 → **477** |
+| Whole suite, 20 of 2,100 fail | `test run` + `test status`: list cut at 717 rows, 6 failures shown | `qa tests` / `qa test_result`: all 20 shown | 44,519 → **1,900** |
+| Test inventory | `test list` | `qa test_list` | 149,058 → **1,421** |
+
+What changes besides the size:
+
+- **Failures fail the call.** `qa tests` exits non-zero when a test fails, when the run times out, or when the filter matched nothing — so a script can trust the exit code. Pass `--strict false` to get the summary as a normal result instead.
+- **The whole suite fits in one answer.** Stock `test status` silently cut the results at 717 of 2,100 rows, which hid 14 of 20 failures; splitting the run by name prefix took 26 calls. `qa tests` lists every failure (up to `--max_failures`, default 20) with a one-line message and its `Assets/…:line`.
+- **A result is never someone else's.** Every run gets a number, and `qa tests` only accepts the summary of the run it started. Stock, a run issued right after a dropped connection once returned the previous run's results.
+- **A dropped connection is recoverable.** An EditMode test that enters Play Mode reloads the domain and drops the request. The run carries on and its summary is recorded in `SessionState`; `qa test_result` reads it back with its number once `unity status --until-ready` says the Editor is back.
+- **`--failed true` re-runs only what is failing.** The failing set is carried across runs: a test joins it when it fails and leaves it when it passes, so an unrelated passing run in between does not forget it.
+- **Repeats are one line.** `qa log` and `qa check` merge identical messages into one entry with a `count`, which is what a console flooded by one per-frame warning needs.
+
 ## Commands
 
-### `ui_find`
+### `ugui find`
 
 Find scene objects by name or visible label. Inactive objects are included, which is the entire point: `GameObject.Find` skips them, and "which object got switched off" is the usual question.
 
 ```bash
-unity command ui_find --name MenuBtn
-unity command ui_find --label "Play" --exact true
-unity command ui_find --name Btn --components true --limit 50
+unity command ugui find --name MenuBtn
+unity command ugui find --label "Play" --exact true
+unity command ugui find --name Btn --components true --limit 50
 ```
 
 | Parameter | Default | Meaning |
@@ -173,12 +221,12 @@ Label matching reads text components on the object and its **direct children onl
 
 TextMeshPro is resolved by type name through reflection, so this compiles with or without TMP present.
 
-### `ui_tree`
+### `ugui tree`
 
 Print the hierarchy under one object.
 
 ```bash
-unity command ui_tree --name LoginScreen --depth 2
+unity command ugui tree --name LoginScreen --depth 2
 ```
 
 | Parameter | Default | Meaning |
@@ -203,13 +251,13 @@ unity command ui_tree --name LoginScreen --depth 2
 
 `scene get_hierarchy` covers the whole scene; this scopes to the part being debugged.
 
-### `ui_click`
+### `ugui click`
 
 Click a UI object by sending pointer events directly to it.
 
 ```bash
-unity command ui_click --path "Canvas/LoginScreen/LoginButton"
-unity command ui_click --name LoginButton
+unity command ugui click --path "Canvas/LoginScreen/LoginButton"
+unity command ugui click --name LoginButton
 ```
 
 **Why this instead of `simulate_pointer`:** that command feeds the Input System, which a project running the legacy `StandaloneInputModule` ignores outright — the event is dispatched and nothing happens. Sending pointer down / up / click to the target works regardless of input backend. Down and up are included because many widgets latch state on pointer-down and only commit on the click.
@@ -226,14 +274,14 @@ Two things it refuses to do:
 - **Ambiguous names are reported, not guessed.** UI names repeat across canvases; silently clicking the wrong one is worse than not clicking. Pass an exact `path` instead.
 - **Inactive targets are rejected.** Clicking what a player cannot see is a false positive that hides the bug.
 
-**Known limitation:** dispatching directly bypasses the raycast, so a button covered by another graphic still "clicks" here even though a real user could not press it. That is what `ui_raycast` is for.
+**Known limitation:** dispatching directly bypasses the raycast, so a button covered by another graphic still "clicks" here even though a real user could not press it. That is what `ugui raycast` is for.
 
-### `ui_input`
+### `ugui input`
 
 Set an input field's text.
 
 ```bash
-unity command ui_input --path "Canvas/LoginScreen/ID_Input" --text "AB12"
+unity command ugui input --path "Canvas/LoginScreen/ID_Input" --text "AB12"
 ```
 
 | Parameter | Default | Meaning |
@@ -244,14 +292,14 @@ unity command ui_input --path "Canvas/LoginScreen/ID_Input" --text "AB12"
 
 **Why assigning `.text` by hand is not enough:** a field whose backing string is replaced never raises `onValueChanged` or `onEndEdit`, so validation, submit buttons and view-model bindings never learn the value changed. The text sits on screen and the game behaves as if the field were empty.
 
-Both `UnityEngine.UI.InputField` and TextMeshPro's `TMP_InputField` are handled; the response reports which one it found. Ambiguous names are refused for the same reason as `ui_click`.
+Both `UnityEngine.UI.InputField` and TextMeshPro's `TMP_InputField` are handled; the response reports which one it found. Ambiguous names are refused for the same reason as `ugui click`.
 
-### `ui_raycast`
+### `ugui raycast`
 
 List everything the UI raycaster hits at a screen point, topmost first.
 
 ```bash
-unity command ui_raycast --x 960 --y 540
+unity command ugui raycast --x 960 --y 540
 ```
 
 This is the diagnostic for a click that goes nowhere. The input module dispatches to the first hit, so a full-screen cover, a loading overlay or a stray raycast-enabled image shows up here as entry zero.
@@ -264,14 +312,14 @@ This is the diagnostic for a click that goes nowhere. The input module dispatche
 
 Coordinates are in pixels with the origin at the bottom-left.
 
-### `uitk_find`
+### `uitk find`
 
 Find UI Toolkit elements by name, USS class or text, across every runtime panel.
 
 ```bash
-unity command uitk_find --name TitleLabel
-unity command uitk_find --class detail-action --document SettingsPopup
-unity command uitk_find --text "Apply" --limit 5
+unity command uitk find --name TitleLabel
+unity command uitk find --class detail-action --document SettingsPopup
+unity command uitk find --text "Apply" --limit 5
 ```
 
 | Parameter | Default | Meaning |
@@ -303,12 +351,12 @@ unity command uitk_find --text "Apply" --limit 5
 
 Panels are reached through `UIDocument`, which is public API, rather than the internal panel registry. Inactive documents are included: "the panel is switched off" is one of the answers being looked for, and excluding them would report it as *not found*.
 
-### `uitk_tree`
+### `uitk tree`
 
 Print the element tree under a panel or a named element.
 
 ```bash
-unity command uitk_tree --name DetailPanel --depth 3 --size true
+unity command uitk tree --name DetailPanel --depth 3 --size true
 ```
 
 | Parameter | Default | Meaning |
@@ -336,16 +384,16 @@ unity command uitk_tree --name DetailPanel --depth 3 --size true
     [ ] CancelButton<Button>  "Cancel"  146x49
 ```
 
-Markers match `ui_tree`: `[-]` the element itself is hidden, `[~]` the element is fine but an ancestor is not. Only the first is fixed on the element.
+Markers match `ugui tree`: `[-]` the element itself is hidden, `[~]` the element is fine but an ancestor is not. Only the first is fixed on the element.
 
 The walk uses `VisualElement.hierarchy`, not `Children()`. A composite control keeps its generated pieces outside the content container — the checkmark a `Toggle` attaches, the `Scroller` a `ScrollView` owns — and those pieces are usually the answer when a widget renders wrong. The listing above shows a `ScrollView` whose scroller buttons were hidden by USS, which `Children()` would not have revealed.
 
-### `uitk_style`
+### `uitk style`
 
 Read one element's resolved style and layout box.
 
 ```bash
-unity command uitk_style --name DetailScroll --props display,flexGrow,width,height
+unity command uitk style --name DetailScroll --props display,flexGrow,width,height
 ```
 
 | Parameter | Default | Meaning |
@@ -368,14 +416,14 @@ unity command uitk_style --name DetailScroll --props display,flexGrow,width,heig
 
 `resolvedStyle` is what the style system computed; `worldBound` is where the element actually sits. They disagree when a parent clips, scales or shrinks it, and that disagreement is usually the bug — so both are reported rather than one standing in for the other.
 
-Ambiguous names are refused with the list of candidates, for the same reason as `ui_click`: element names repeat across documents, and measuring the wrong one produces a confident answer about the wrong element.
+Ambiguous names are refused with the list of candidates, for the same reason as `ugui click`: element names repeat across documents, and measuring the wrong one produces a confident answer about the wrong element.
 
-### `wait_for`
+### `wait until`
 
 Poll a C# expression on the server until it matches, then return.
 
 ```bash
-unity command wait_for \
+unity command wait until \
   --code 'return MyGame.GameSystem.Instance?.CurrentView.ToString();' \
   --equals Lobby --timeout 180 --interval 3
 ```
@@ -400,13 +448,13 @@ A timeout returns `succeeded: false` with the last observed value rather than ra
 
 Evaluation runs on the main thread through the Pipeline package's own `script eval` command, found through the public `CommandRegistry`, so anything expressible in `eval` works, including project types. The command is declared `MainThreadRequired = false` so the delay between attempts does not block the Editor.
 
-### `play_mode`
+### `wait playmode`
 
 Enter or leave play mode and return once the transition has happened.
 
 ```bash
-unity command play_mode --state stop
-unity command play_mode --state play --settle false
+unity command wait playmode --state stop
+unity command wait playmode --state play --settle false
 ```
 
 | Parameter | Default | Meaning |
@@ -430,9 +478,108 @@ Entering is different. A domain reload tears down the HTTP server along with the
   "detail": "Entering play mode reloads the domain, which drops this connection before it can answer. …" }
 ```
 
-Play mode still starts. Confirm with `editor status`, or `wait_for` a condition in the running scene — which is the better wait anyway, since a scene that has entered play is usually not yet ready. With **Reload Domain** switched off in Project Settings, `settle` works in both directions.
+Play mode still starts. Confirm with `editor status`, or `wait until` a condition in the running scene — which is the better wait anyway, since a scene that has entered play is usually not yet ready. With **Reload Domain** switched off in Project Settings, `settle` works in both directions.
 
 Requesting the state the Editor is already in is not an error; it returns `changed: false` with the current state.
+
+### `qa check`
+
+```bash
+unity command qa check --result-only
+```
+
+| Parameter | Default | Meaning |
+|---|---|---|
+| `top` | `5` | Distinct runtime errors to include, newest first |
+| `chars` | `200` | Maximum characters per message |
+
+```json
+{ "ready": true, "playMode": "stopped", "compileFailed": false,
+  "console": { "errors": 4, "warnings": 27, "logs": 0 },
+  "errors": [ { "level": "error", "count": 4,
+                "message": "NullReferenceException: Object reference not set to an instance of an object",
+                "at": "Assets/Project/Scripts/Editor/BlitterInitErrorSuppressor.cs:101" } ] }
+```
+
+`compileErrors`, `compiling` and `testsRunning` appear only when there is something to say.
+
+### `qa log`
+
+```bash
+unity command qa log                                     # newest distinct errors
+unity command qa log --level warn --grep_not "Renderer at|Shader" --tail 10
+unity command qa log --since 1234                        # only what arrived after an earlier answer's cursor
+```
+
+| Parameter | Default | Meaning |
+|---|---|---|
+| `level` | `error` | Minimum severity: `log`, `warn`, `error` |
+| `grep` | — | Keep entries containing any of these (`|`-separated, case-insensitive) |
+| `grep_not` | — | Drop entries containing any of these |
+| `tail` | `20` | Lines to return, newest first |
+| `collapse` | `true` | Merge identical messages into one line with a `count` |
+| `stack` | `0` | Stack-trace lines per entry |
+| `chars` | `300` | Maximum characters per message |
+| `since` | `-1` | Only entries after this `cursor` |
+| `scan` | `0` | Newest entries to examine; `0` reads the whole console |
+
+It reads the Editor console itself (`UnityEditor.LogEntries`), not the Pipeline's capture buffer, so it sees compile errors and survives domain reloads. The Console window's level toggles are switched on for the duration of the read and restored, so a user who hid warnings does not hide them from the caller.
+
+### `qa tests`
+
+```bash
+unity command qa tests --filter "StoryArchive|MissionNotification" --result-only
+unity command qa tests --timeout 400 --result-only        # whole EditMode suite
+unity command qa tests --failed true --result-only        # only what is failing
+```
+
+| Parameter | Default | Meaning |
+|---|---|---|
+| `filter` | — | Substring of the full test name (`|` separates alternatives); empty runs the whole mode |
+| `mode` | `editor` | `editor` or `play` |
+| `category` | — | Only tests in this NUnit category |
+| `failed` | `false` | Run only the tests known to be failing |
+| `strict` | `true` | Exit non-zero on a failure, a timeout, or no match |
+| `max_failures` | `20` | Failures listed in full |
+| `chars` | `240` | Maximum characters per failure message |
+| `timeout` | `600` | Seconds to wait; also the request timeout |
+
+A passing run:
+
+```json
+{ "run": 4, "mode": "EditMode", "filter": "BattleResultNavigationTests", "total": 8, "passed": 8, "seconds": 0.07 }
+```
+
+A failing run exits `6` and the reason is the failure list itself:
+
+```
+Run 2 (EditMode, StoryArchiveTableTests): 4 failed of 37 in 0.3s.
+- Seorin.Editor.Tests.StoryArchiveTableTests.ImportedRows_…: System.IO.DirectoryNotFoundException : … [Assets/Project/Scripts/Editor/StoryArchiveTableTests.cs:862]
+- …
+```
+
+### `qa test_result`
+
+```bash
+unity status --until-ready --project-path .
+unity command qa test_result --result-only
+```
+
+The last finished run's summary with its `run` number and `finishedAt`. While a run is still going it answers `{ "running": true, "last": … }`. Runs started from the Test Runner window are recorded too.
+
+### `qa test_list`
+
+```bash
+unity command qa test_list --result-only                          # "Fixture (count)" lines
+unity command qa test_list --filter IdleReward --names true --result-only
+```
+
+| Parameter | Default | Meaning |
+|---|---|---|
+| `filter` | — | Substring of the full test name (`|` separates alternatives) |
+| `mode` | `editor` | `editor` or `play` |
+| `names` | `false` | List test names instead of fixtures |
+| `limit` | `100` | Maximum fixtures or names returned |
 
 ## Patches
 
